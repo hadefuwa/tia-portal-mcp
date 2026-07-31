@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TIA Portal Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#c9d1d9;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+/* Header */
+header{background:#161b22;border-bottom:2px solid #009abe;padding:10px 20px;display:flex;align-items:center;gap:14px;flex-shrink:0}
+.logo{font-size:16px;font-weight:700;color:#009abe;letter-spacing:1px;white-space:nowrap}
+.project-name{font-size:13px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:400px}
+.header-right{margin-left:auto;display:flex;align-items:center;gap:10px;flex-shrink:0}
+.dot{width:9px;height:9px;border-radius:50%;background:#f85149;flex-shrink:0;transition:background .3s}
+.dot.on{background:#3fb950}
+#status-text{font-size:12px;color:#8b949e}
+
+/* Layout */
+.body{display:flex;flex:1;overflow:hidden}
+.sidebar{width:270px;background:#161b22;border-right:1px solid #21262d;display:flex;flex-direction:column;flex-shrink:0}
+.sidebar-top{padding:10px 14px;border-bottom:1px solid #21262d;font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.5px}
+.tree{flex:1;overflow-y:auto;padding:4px 0}
+.content{flex:1;overflow-y:auto;padding:24px}
+
+/* Tree */
+.tree-device{padding:7px 14px;font-size:13px;font-weight:600;color:#e6edf3;cursor:pointer;display:flex;align-items:center;gap:6px;border-left:2px solid transparent}
+.tree-device:hover{background:#21262d}
+.tree-device.expanded{border-left-color:#009abe}
+.tree-group{padding:5px 14px 3px 28px;font-size:11px;font-weight:600;color:#6e7681;text-transform:uppercase;letter-spacing:.4px;margin-top:4px}
+.tree-item{padding:5px 14px 5px 36px;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:6px;border-left:2px solid transparent;color:#c9d1d9}
+.tree-item:hover{background:#21262d}
+.tree-item.active{background:#1f6feb22;border-left-color:#58a6ff;color:#58a6ff}
+
+/* Buttons */
+.btn{padding:6px 14px;border:none;border-radius:5px;cursor:pointer;font-size:13px;font-weight:500;transition:filter .15s}
+.btn:hover{filter:brightness(1.15)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn-tia{background:#009abe;color:#fff}
+.btn-green{background:#238636;color:#fff}
+.btn-blue{background:#1f6feb;color:#fff}
+.btn-sm{padding:4px 10px;font-size:12px}
+
+/* Content sections */
+.section-title{font-size:18px;font-weight:600;color:#e6edf3;margin-bottom:16px}
+.info-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+.stat{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px 16px}
+.stat-val{font-size:26px;font-weight:700;color:#009abe}
+.stat-lbl{font-size:11px;color:#8b949e;margin-top:2px}
+.info-table{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px 16px;max-width:520px}
+.row{display:flex;gap:10px;margin-bottom:8px;font-size:13px;align-items:flex-start}
+.row:last-child{margin-bottom:0}
+.lbl{color:#8b949e;width:110px;flex-shrink:0}
+.val{color:#e6edf3;word-break:break-all}
+
+/* Block view */
+.block-header{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.block-title{font-size:17px;font-weight:600;color:#e6edf3}
+.badge{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.b-OB{background:#2d2208;color:#d29922}
+.b-FB{background:#0e2040;color:#58a6ff}
+.b-FC{background:#0e2a1a;color:#3fb950}
+.b-DB,.b-GlobalDB{background:#200e30;color:#bc8cff}
+.b-SCL{background:#0a1d2a;color:#79c0ff}
+.b-LAD,.b-FBD,.b-STL,.b-GRAPH{background:#1e1e1e;color:#6e7681}
+
+.tabs{display:flex;border-bottom:1px solid #21262d;margin-bottom:16px}
+.tab{padding:8px 16px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;color:#8b949e;transition:color .15s}
+.tab.active{border-bottom-color:#009abe;color:#009abe}
+.tab:hover:not(.active){color:#c9d1d9}
+
+.code-area{width:100%;min-height:380px;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:14px;font-family:'Consolas','Courier New',monospace;font-size:13px;color:#e6edf3;resize:vertical;line-height:1.65;tab-size:2}
+.code-area:focus{outline:none;border-color:#009abe}
+.code-area[readonly]{color:#8b949e}
+
+.btn-row{display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap}
+.compile-out{margin-top:12px;padding:12px 14px;border-radius:6px;font-size:12px;font-family:monospace;white-space:pre-wrap;max-height:200px;overflow-y:auto;display:none}
+.compile-out.ok{background:#0a1f10;border:1px solid #3fb950;color:#3fb950;display:block}
+.compile-out.err{background:#1f0a0a;border:1px solid #f85149;color:#f85149;display:block}
+
+.alert{padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:14px}
+.alert-warn{background:#241b08;border:1px solid #d29922;color:#d29922}
+
+/* Tags table */
+.tag-table{width:100%;border-collapse:collapse;font-size:13px}
+.tag-table th{text-align:left;padding:9px 12px;border-bottom:2px solid #21262d;color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
+.tag-table td{padding:8px 12px;border-bottom:1px solid #21262d}
+.tag-table tr:hover td{background:#161b22}
+code.addr{color:#3fb950;font-family:monospace;font-size:12px}
+code.name{color:#79c0ff;font-family:monospace;font-size:12px}
+code.type{color:#d2a8ff;font-family:monospace;font-size:12px}
+
+/* Analysis */
+.findings{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.finding{padding:10px 14px;border-radius:6px;font-size:13px;border-left:3px solid}
+.finding-error{background:#1f0a0a;border-left-color:#f85149}
+.finding-warning{background:#241b08;border-left-color:#d29922}
+.finding-info{background:#0d1f2a;border-left-color:#58a6ff}
+
+/* Connect screen */
+.center{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;text-align:center}
+.center h2{color:#009abe;font-size:22px}
+.center p{color:#8b949e;max-width:420px;font-size:14px;line-height:1.6}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:7px}
+::-webkit-scrollbar-track{background:#0d1117}
+::-webkit-scrollbar-thumb{background:#30363d;border-radius:4px}
+.loading{color:#8b949e;font-style:italic;font-size:13px;padding:12px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">⚙ TIA Portal</div>
+  <div class="project-name" id="proj-name">Not connected</div>
+  <div class="header-right">
+    <div class="dot" id="dot"></div>
+    <span id="status-text">Disconnected</span>
+    <button class="btn btn-tia btn-sm" id="connect-btn" onclick="connect()">Connect</button>
+    <button class="btn btn-green btn-sm" style="display:none" id="save-btn" onclick="saveProject()">💾 Save</button>
+  </div>
+</header>
+
+<div class="body">
+  <div class="sidebar">
+    <div class="sidebar-top">Explorer</div>
+    <div class="tree" id="tree"><div class="loading">No project open</div></div>
+  </div>
+  <div class="content" id="content">
+    <div class="center">
+      <div style="font-size:52px">⚙</div>
+      <h2>TIA Portal Dashboard</h2>
+      <p>Opens your TIA Portal V20 project directly in the browser.<br>
+         Make sure TIA Portal is running with your project open, then click Connect.</p>
+      <button class="btn btn-tia" onclick="connect()">Connect to TIA Portal</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentDev = null;
+
+// ── Boot ───────────────────────────────────────────────────────────────────────
+window.onload = async () => {
+  const s = await api('GET', '/api/status');
+  if (s?.connected) { onConnected(s.project); await buildTree(); showOverview(s.project); }
+};
+
+// ── Connection ─────────────────────────────────────────────────────────────────
+async function connect() {
+  setStatus('Connecting…', false);
+  document.getElementById('connect-btn').disabled = true;
+  const r = await api('POST', '/api/connect');
+  document.getElementById('connect-btn').disabled = false;
+  if (r?.error) { setStatus(r.error, false); return; }
+  onConnected(r);
+  await buildTree();
+  showOverview(r);
+}
+
+function onConnected(proj) {
+  document.getElementById('proj-name').textContent = proj?.name ?? '';
+  document.getElementById('proj-name').title = proj?.path ?? '';
+  setStatus('Connected', true);
+  document.getElementById('connect-btn').textContent = '↺ Refresh';
+  document.getElementById('save-btn').style.display = '';
+}
+
+function setStatus(text, connected) {
+  document.getElementById('dot').className = 'dot' + (connected ? ' on' : '');
+  document.getElementById('status-text').textContent = text;
+}
+
+async function saveProject() {
+  const r = await api('POST', '/api/project/save');
+  alert(r?.error ? 'Save failed: ' + r.error : 'Project saved.');
+}
+
+// ── Tree ───────────────────────────────────────────────────────────────────────
+async function buildTree() {
+  const tree = document.getElementById('tree');
+  tree.innerHTML = '<div class="loading">Loading devices…</div>';
+  const devices = await api('GET', '/api/devices');
+  if (!devices?.length) { tree.innerHTML = '<div class="loading">No devices found</div>'; return; }
+  tree.innerHTML = '';
+  devices.forEach(dev => {
+    const el = document.createElement('div');
+    el.innerHTML = `
+      <div class="tree-device" id="dev-${eid(dev.name)}" onclick="toggleDev('${dev.name}',this)">
+        <span id="arr-${eid(dev.name)}">▸</span> 🖥 ${h(dev.name)}
+      </div>
+      <div id="sub-${eid(dev.name)}" style="display:none">
+        <div class="tree-group">Blocks</div>
+        <div id="blocks-${eid(dev.name)}">
+          <div class="tree-item" onclick="loadBlocks('${dev.name}')">  ↳ Load blocks…</div>
+        </div>
+        <div class="tree-group">Tag Tables</div>
+        <div id="taggrp-${eid(dev.name)}">
+          <div class="tree-item" onclick="loadTagTables('${dev.name}')">  ↳ Load tables…</div>
+        </div>
+      </div>`;
+    tree.appendChild(el);
+  });
+}
+
+function toggleDev(name, el) {
+  const sub = document.getElementById('sub-' + eid(name));
+  const arr = document.getElementById('arr-' + eid(name));
+  const open = sub.style.display === 'none';
+  sub.style.display = open ? 'block' : 'none';
+  arr.textContent = open ? '▾' : '▸';
+  el.className = 'tree-device' + (open ? ' expanded' : '');
+  if (open && currentDev !== name) { currentDev = name; loadBlocks(name); loadTagTables(name); }
+}
+
+async function loadBlocks(device) {
+  const c = document.getElementById('blocks-' + eid(device));
+  c.innerHTML = '<div class="loading">Loading…</div>';
+  const blocks = await api('GET', `/api/devices/${enc(device)}/blocks`);
+  c.innerHTML = '';
+  if (!blocks?.length) { c.innerHTML = '<div class="loading">No blocks</div>'; return; }
+  blocks.forEach(b => {
+    const item = document.createElement('div');
+    item.className = 'tree-item';
+    item.id = 'bi-' + eid(b.name);
+    item.onclick = () => openBlock(device, b);
+    item.innerHTML = `${blockIcon(b.type)} ${h(b.name)} <span style="margin-left:auto;font-size:11px;color:#6e7681">${b.type}</span>`;
+    c.appendChild(item);
+  });
+}
+
+async function loadTagTables(device) {
+  const c = document.getElementById('taggrp-' + eid(device));
+  c.innerHTML = '<div class="loading">Loading…</div>';
+  const tables = await api('GET', `/api/devices/${enc(device)}/tags`);
+  c.innerHTML = '';
+  if (!tables?.length) { c.innerHTML = '<div class="loading">No tag tables</div>'; return; }
+  tables.forEach(t => {
+    const item = document.createElement('div');
+    item.className = 'tree-item';
+    item.onclick = () => openTagTable(device, t.name);
+    item.innerHTML = `🏷 ${h(t.name)} <span style="margin-left:auto;font-size:11px;color:#6e7681">${t.tagCount}</span>`;
+    c.appendChild(item);
+  });
+}
+
+// ── Content views ──────────────────────────────────────────────────────────────
+function showOverview(proj) {
+  setContent(`
+    <div class="section-title">Project Overview</div>
+    <div class="info-grid">
+      <div class="stat"><div class="stat-val">${proj.deviceCount}</div><div class="stat-lbl">Devices</div></div>
+      <div class="stat"><div class="stat-val">${proj.isModified ? '⚠' : '✓'}</div><div class="stat-lbl">${proj.isModified ? 'Unsaved changes' : 'All saved'}</div></div>
+    </div>
+    <div class="info-table">
+      ${row('Project', proj.name)}
+      ${row('Author', proj.author || '—')}
+      ${row('TIA Version', proj.portalVersion || '—')}
+      ${row('Modified', proj.modifiedDate ? new Date(proj.modifiedDate).toLocaleString() : '—')}
+      ${row('Path', proj.path, true)}
+    </div>`);
+}
+
+async function openBlock(device, bi) {
+  document.querySelectorAll('.tree-item').forEach(e => e.classList.remove('active'));
+  const el = document.getElementById('bi-' + eid(bi.name));
+  if (el) el.classList.add('active');
+  setContent('<div class="loading">Reading ' + h(bi.name) + '…</div>');
+  const b = await api('GET', `/api/devices/${enc(device)}/blocks/${enc(bi.name)}`);
+  if (b?.error) { setContent('<div class="alert alert-warn">Error: ' + h(b.error) + '</div>'); return; }
+
+  const isScl = b.language === 'SCL';
+  setContent(`
+    <div class="block-header">
+      <div class="block-title">${h(b.name)}</div>
+      <span class="badge b-${b.type}">${b.type}</span>
+      <span class="badge b-${b.language}">${b.language}</span>
+      ${b.isKnowHow ? '<span class="badge" style="background:#282208;color:#d29922">Know-How Protected</span>' : ''}
+    </div>
+    <div style="margin-bottom:14px">
+      ${row('Number', b.number)} ${row('Modified', b.modified ? new Date(b.modified).toLocaleString() : '—')}
+    </div>
+    ${!isScl ? '<div class="alert alert-warn">This block is programmed in ' + b.language + '. Only SCL blocks have readable/editable source code.</div>' : ''}
+    ${isScl ? `
+      <div class="tabs">
+        <div class="tab active" onclick="tab(event,'editor')">SCL Editor</div>
+        <div class="tab" onclick="tab(event,'xml')">Raw XML</div>
+      </div>
+      <div id="pane-editor">
+        <textarea class="code-area" id="scl-editor">${h(b.sourceCode)}</textarea>
+        <div class="btn-row">
+          <button class="btn btn-green" onclick="saveScl('${device}','${b.name}')">💾 Save SCL</button>
+          <button class="btn btn-blue" onclick="compile('${device}','${b.name}')">▶ Compile</button>
+          <button class="btn btn-sm" style="background:#21262d;color:#c9d1d9" onclick="analyzeBlock('${device}','${b.name}')">🔍 Analyze</button>
+        </div>
+        <div id="compile-out" class="compile-out"></div>
+      </div>
+      <div id="pane-xml" style="display:none">
+        <textarea class="code-area" style="min-height:500px;color:#6e7681" readonly>${h(b.xmlContent)}</textarea>
+      </div>
+    ` : ''}
+  `);
+}
+
+async function openTagTable(device, tableName) {
+  setContent('<div class="loading">Loading ' + h(tableName) + '…</div>');
+  const tags = await api('GET', `/api/devices/${enc(device)}/tags/${enc(tableName)}`);
+  if (!Array.isArray(tags)) { setContent('<div class="alert alert-warn">Error loading tags</div>'); return; }
+  const rows = tags.map(t => `<tr>
+    <td><code class="name">${h(t.name)}</code></td>
+    <td><code class="type">${h(t.dataType)}</code></td>
+    <td><code class="addr">${h(t.address)}</code></td>
+    <td style="color:#8b949e;font-size:12px">${h(t.comment)}</td>
+    <td style="text-align:center">${t.accessible ? '<span style="color:#3fb950">✓</span>' : '<span style="color:#6e7681">—</span>'}</td>
+    <td style="text-align:center">${t.writable ? '<span style="color:#3fb950">✓</span>' : '<span style="color:#6e7681">—</span>'}</td>
+  </tr>`).join('');
+  setContent(`
+    <div class="section-title">🏷 ${h(tableName)} <span style="font-size:13px;color:#6e7681;font-weight:400">${tags.length} tags</span></div>
+    <div style="overflow-x:auto">
+    <table class="tag-table">
+      <thead><tr><th>Name</th><th>Type</th><th>Address</th><th>Comment</th><th>Read</th><th>Write</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6" style="color:#6e7681;padding:20px;text-align:center">No tags in this table</td></tr>'}</tbody>
+    </table>
+    </div>`);
+}
+
+// ── Actions ────────────────────────────────────────────────────────────────────
+async function saveScl(device, blockName) {
+  const src = document.getElementById('scl-editor')?.value;
+  if (src == null) return;
+  showOutput('Saving…', 'ok');
+  const r = await api('PUT', `/api/devices/${enc(device)}/blocks/${enc(blockName)}/scl`, { source: src });
+  showOutput(r?.error ? '❌ ' + r.error : '✓ SCL saved successfully', r?.error ? 'err' : 'ok');
+}
+
+async function compile(device, blockName) {
+  showOutput('Compiling…', 'ok');
+  const r = await api('POST', `/api/devices/${enc(device)}/blocks/${enc(blockName)}/compile`);
+  if (r?.error) { showOutput('❌ ' + r.error, 'err'); return; }
+  const isErr = r.result && /Error/i.test(r.result);
+  showOutput(r.result ?? 'Done', isErr ? 'err' : 'ok');
+}
+
+async function analyzeBlock(device, blockName) {
+  showOutput('Analyzing…', 'ok');
+  const r = await api('POST', `/api/devices/${enc(device)}/blocks/${enc(blockName)}/analyze`);
+  if (r?.error) { showOutput('❌ ' + r.error, 'err'); return; }
+  const issues = r.issues ?? [];
+  if (!issues.length) { showOutput('✓ No issues found', 'ok'); return; }
+  const lines = issues.map(i => `[${i.severity}] Line ${i.line}: ${i.message}`).join('\n');
+  showOutput(lines, issues.some(i => i.severity === 'Error') ? 'err' : 'ok');
+}
+
+function showOutput(text, cls) {
+  const el = document.getElementById('compile-out');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'compile-out ' + cls;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function tab(evt, name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  evt.target.classList.add('active');
+  ['editor','xml'].forEach(n => {
+    const el = document.getElementById('pane-' + n);
+    if (el) el.style.display = n === name ? 'block' : 'none';
+  });
+}
+
+function row(label, val, small) {
+  return `<div class="row"><span class="lbl">${label}</span><span class="val"${small?' style="font-size:11px"':''}>${h(String(val ?? '—'))}</span></div>`;
+}
+
+function setContent(html) { document.getElementById('content').innerHTML = html; }
+function h(s) { return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function enc(s) { return encodeURIComponent(s); }
+function eid(s) { return s.replace(/[^a-zA-Z0-9]/g,'_'); }
+function blockIcon(t) { return {OB:'🟡',FB:'🔵',FC:'🟢',DB:'🟣',GlobalDB:'🟣'}[t]??'⬜'; }
+
+async function api(method, url, body) {
+  try {
+    const r = await fetch(url, {
+      method,
+      headers: body ? {'Content-Type':'application/json'} : {},
+      body: body ? JSON.stringify(body) : undefined
+    });
+    return await r.json();
+  } catch(e) { return { error: e.message }; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# Build output
+bin/
+obj/
+
+# IDE
+*.user
+.vs/
+*.suo
+
+# TIA Portal project files (not part of the source code)
+AdditionalFiles/
+IM/
+Logs/
+System/
+Vci/
+XRef/
+*.ap20
+*.ap18
+*.ap19
+*.ap21
+*.pma15_0
