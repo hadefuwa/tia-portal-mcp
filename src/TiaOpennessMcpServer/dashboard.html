@@ -80,6 +80,12 @@ header{background:#161b22;border-bottom:2px solid #009abe;padding:10px 20px;disp
 
 .alert{padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:14px}
 .alert-warn{background:#241b08;border:1px solid #d29922;color:#d29922}
+.btn-danger{background:#6e1313;color:#fca5a5}
+.btn-danger:hover{filter:brightness(1.3)}
+.pkg-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:14px}
+.pkg-table th{text-align:left;padding:9px 12px;border-bottom:2px solid #21262d;color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+.pkg-table td{padding:9px 12px;border-bottom:1px solid #21262d;vertical-align:middle}
+.pkg-table tr:hover td{background:#161b22}
 
 /* Tags table */
 .tag-table{width:100%;border-collapse:collapse;font-size:13px}
@@ -160,6 +166,7 @@ async function connect() {
 }
 
 function onConnected(proj) {
+  window._proj = proj;
   document.getElementById('proj-name').textContent = proj?.name ?? '';
   document.getElementById('proj-name').title = proj?.path ?? '';
   setStatus('Connected', true);
@@ -184,6 +191,14 @@ async function buildTree() {
   const devices = await api('GET', '/api/devices');
   if (!devices?.length) { tree.innerHTML = '<div class="loading">No devices found</div>'; return; }
   tree.innerHTML = '';
+
+  // Project-level section
+  const projSec = document.createElement('div');
+  projSec.innerHTML = `
+    <div class="tree-group">Project</div>
+    <div class="tree-item" onclick="showOverview(window._proj)">📊 Overview</div>
+    <div class="tree-item" id="ti-options" onclick="showOptionPackages()">📦 Option Packages</div>`;
+  tree.appendChild(projSec);
   devices.forEach(dev => {
     const el = document.createElement('div');
     el.innerHTML = `
@@ -281,7 +296,6 @@ async function openBlock(device, bi) {
     <div style="margin-bottom:14px">
       ${row('Number', b.number)} ${row('Modified', b.modified ? new Date(b.modified).toLocaleString() : '—')}
     </div>
-    ${!isScl ? '<div class="alert alert-warn">This block is programmed in ' + b.language + '. Only SCL blocks have readable/editable source code.</div>' : ''}
     ${isScl ? `
       <div class="tabs">
         <div class="tab active" onclick="tab(event,'editor')">SCL Editor</div>
@@ -297,9 +311,21 @@ async function openBlock(device, bi) {
         <div id="compile-out" class="compile-out"></div>
       </div>
       <div id="pane-xml" style="display:none">
-        <textarea class="code-area" style="min-height:500px;color:#6e7681" readonly>${h(b.xmlContent)}</textarea>
+        <textarea class="code-area" style="min-height:500px" id="xml-editor">${h(b.xmlContent)}</textarea>
+        <div class="btn-row">
+          <button class="btn btn-green" onclick="saveXml('${device}','${b.name}')">💾 Save XML</button>
+        </div>
       </div>
-    ` : ''}
+    ` : `
+      <div class="alert alert-warn">${b.language} is a graphical language — no text source. Showing raw export XML.</div>
+      <div id="pane-xml">
+        <textarea class="code-area" style="min-height:500px" id="xml-editor">${h(b.xmlContent || b.sourceCode)}</textarea>
+        <div class="btn-row">
+          <button class="btn btn-green" onclick="saveXml('${device}','${b.name}')">💾 Save XML</button>
+        </div>
+        <div id="compile-out" class="compile-out"></div>
+      </div>
+    `}
   `);
 }
 
@@ -332,6 +358,55 @@ async function saveScl(device, blockName) {
   showOutput('Saving…', 'ok');
   const r = await api('PUT', `/api/devices/${enc(device)}/blocks/${enc(blockName)}/scl`, { source: src });
   showOutput(r?.error ? '❌ ' + r.error : '✓ SCL saved successfully', r?.error ? 'err' : 'ok');
+}
+
+async function saveXml(device, blockName) {
+  const src = document.getElementById('xml-editor')?.value;
+  if (src == null) return;
+  showOutput('Saving XML…', 'ok');
+  const r = await api('POST', `/api/devices/${enc(device)}/blocks/${enc(blockName)}/xml`, { content: src });
+  showOutput(r?.error ? '❌ ' + r.error : '✓ XML imported successfully', r?.error ? 'err' : 'ok');
+}
+
+async function showOptionPackages() {
+  document.querySelectorAll('.tree-item').forEach(e => e.classList.remove('active'));
+  const ti = document.getElementById('ti-options');
+  if (ti) ti.classList.add('active');
+  setContent('<div class="loading">Loading used products…</div>');
+  const pkgs = await api('GET', '/api/project/options');
+  if (pkgs?.error) { setContent('<div class="alert alert-warn">Error: ' + h(pkgs.error) + '</div>'); return; }
+  if (!Array.isArray(pkgs) || !pkgs.length) {
+    setContent('<div class="section-title">📦 Used Products</div><p style="color:#8b949e;font-size:13px;margin-top:8px">No used products found in this project.</p>');
+    return;
+  }
+  const rows = pkgs.map(p => `<tr>
+    <td style="color:#e6edf3">${h(p.displayName)}</td>
+    <td><code style="color:#79c0ff;font-size:12px">${h(p.displayVersion)}</code></td>
+  </tr>`).join('');
+  setContent(`
+    <div class="section-title">📦 Used Products</div>
+    <p style="color:#8b949e;font-size:13px;margin-bottom:14px">Products referenced by this project. The TIA Portal Openness API exposes these as read-only — removal must be done inside TIA Portal.</p>
+    <div style="overflow-x:auto">
+      <table class="pkg-table">
+        <thead><tr><th>Product</th><th>Version</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div style="margin-top:20px;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px">
+      <div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:10px">How to remove a product dependency in TIA Portal</div>
+      <ol style="color:#8b949e;font-size:13px;line-height:2;padding-left:18px">
+        <li>In TIA Portal, open <b style="color:#c9d1d9">Options → Support packages</b> from the menu bar</li>
+        <li>Or right-click the project in the Project tree → <b style="color:#c9d1d9">Properties</b></li>
+        <li>Switch to the <b style="color:#c9d1d9">General</b> tab and look for <b style="color:#c9d1d9">Used products / Option packages</b></li>
+        <li>Select the StartDrive entry and click <b style="color:#c9d1d9">Remove</b> or <b style="color:#c9d1d9">Delete</b></li>
+        <li>Save the project (<kbd style="background:#21262d;padding:1px 5px;border-radius:3px">Ctrl+S</kbd>)</li>
+      </ol>
+      <p style="color:#6e7681;font-size:12px;margin-top:10px">If the option is greyed out, ensure the project has no blocks that use StartDrive function calls.</p>
+    </div>
+    <div style="margin-top:12px">
+      <button class="btn btn-sm" style="background:#21262d;color:#c9d1d9" onclick="showOptionPackages()">↺ Refresh</button>
+    </div>
+  `);
 }
 
 async function compile(device, blockName) {

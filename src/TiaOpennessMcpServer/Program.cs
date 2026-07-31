@@ -161,6 +161,17 @@ async Task HandleAsync(HttpListenerContext ctx)
         }
 
         // ── Block compile ─────────────────────────────────────────────────────
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/blocks/{block}/xml", out m))
+        {
+            try
+            {
+                var body = await ReadJson<XmlWriteRequest>(req);
+                await sw.WriteBlockXmlAsync(m["device"], m["block"], body?.Content ?? "");
+                await Json(res, new { success = true });
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
         else if (method == "POST" && TryMatch(path, "/api/devices/{device}/blocks/{block}/compile", out m))
         {
             try   { await Json(res, new { result = await sw.CompileBlockAsync(m["device"], m["block"]) }); }
@@ -195,6 +206,13 @@ async Task HandleAsync(HttpListenerContext ctx)
         }
 
         // ── Save project ──────────────────────────────────────────────────────
+        // ── Option packages ───────────────────────────────────────────────────────
+        else if (method == "GET" && path == "/api/project/options")
+        {
+            try   { await Json(res, await tia.GetOptionPackagesAsync()); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
         else if (method == "POST" && path == "/api/project/save")
         {
             try   { await tia.SaveAsync(); await Json(res, new { success = true }); }
@@ -276,3 +294,4 @@ class SclWriteRequest   { public string Source    { get; set; } = ""; }
 class SclAnalyzeRequest { public string Source    { get; set; } = "";
                           public string BlockName { get; set; } = "Block";
                           public string BlockType { get; set; } = "FB"; }
+class XmlWriteRequest   { public string Content   { get; set; } = ""; }

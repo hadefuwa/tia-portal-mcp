@@ -215,6 +215,24 @@ public sealed class SoftwareService
         });
     }
 
+    public async Task WriteBlockXmlAsync(string deviceName, string blockName, string xmlContent)
+    {
+        _tia.EnsureConnected();
+        if (string.IsNullOrWhiteSpace(xmlContent))
+            throw new ArgumentException("XML content is empty.");
+
+        await _sta.RunAsync(() =>
+        {
+            var plc = GetPlcSoftware(deviceName);
+            Directory.CreateDirectory(_opts.ExportDirectory);
+            var importFile = Path.Combine(_opts.ExportDirectory,
+                $"{deviceName}_{blockName}_xml_edit.xml");
+            File.WriteAllText(importFile, xmlContent);
+            plc.BlockGroup.Blocks.Import(new FileInfo(importFile), ImportOptions.Override);
+            _log.LogInformation("Imported raw XML for {Block} on {Device}.", blockName, deviceName);
+        });
+    }
+
     public async Task ImportBlockAsync(string deviceName, string xmlFilePath)
     {
         _tia.EnsureConnected();

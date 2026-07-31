@@ -123,6 +123,26 @@ public sealed class TiaPortalService : IDisposable
         return await _sta.RunAsync(() => BuildProjectInfo(_project!));
     }
 
+    // ── Option packages ───────────────────────────────────────────────────────
+
+    public async Task<IReadOnlyList<Models.OptionPackageInfo>> GetOptionPackagesAsync()
+    {
+        EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var result = new List<Models.OptionPackageInfo>();
+            foreach (UsedProduct pkg in _project!.UsedProducts)
+            {
+                result.Add(new Models.OptionPackageInfo
+                {
+                    DisplayName    = pkg.Name    ?? "",
+                    DisplayVersion = pkg.Version ?? "",
+                });
+            }
+            return (IReadOnlyList<Models.OptionPackageInfo>)result;
+        });
+    }
+
     public async Task CloseAsync()
     {
         if (_project is null) return;
