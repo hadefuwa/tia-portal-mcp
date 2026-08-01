@@ -1,6 +1,11 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Siemens.Engineering;
+using Siemens.Engineering.HW;
+using Siemens.Engineering.HW.Features;
+using Siemens.Engineering.SW;
+using Siemens.Engineering.SW.Blocks;
+using Siemens.Engineering.SW.Tags;
 using TiaOpennessMcpServer.Models;
 using TiaOpennessMcpServer.Utilities;
 
@@ -121,6 +126,226 @@ public sealed class TiaPortalService : IDisposable
     {
         EnsureConnected();
         return await _sta.RunAsync(() => BuildProjectInfo(_project!));
+    }
+
+    // ── Clone project ─────────────────────────────────────────────────────────
+
+    public async Task<Models.CloneResult> CloneProjectAsync(string newName, string targetFolder)
+    {
+        EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var result = new Models.CloneResult();
+            var exportDir = Path.Combine(_opts.ExportDirectory, "clone_export");
+            Directory.CreateDirectory(exportDir);
+
+            // ── 1. Snapshot device info before we touch anything ──────────────
+            var srcProject = _project!;
+            var deviceSnapshots = new List<(string Name, string TypeId, string Ip)>();
+            var blockFiles   = new List<(string DeviceName, string FilePath)>();
+            var tagFiles     = new List<(string DeviceName, string FilePath)>();
+
+            foreach (Device device in srcProject.Devices)
+            {
+                string typeId = "", ip = "";
+                try { typeId = device.TypeIdentifier ?? ""; } catch { }
+                ip = ReadIpFromDevice(device);
+                deviceSnapshots.Add((device.Name, typeId, ip));
+
+                var plc = GetPlcFromDevice(device);
+                if (plc is null) continue;
+
+                // Export blocks
+                foreach (PlcBlock block in plc.BlockGroup.Blocks.Cast<PlcBlock>())
+                {
+                    var f = Path.Combine(exportDir, $"{device.Name}__BLOCK__{block.Name}.xml");
+                    try
+                    {
+                        block.Export(new FileInfo(f), ExportOptions.WithDefaults);
+                        blockFiles.Add((device.Name, f));
+                        result.BlocksExported++;
+                    }
+                    catch (Exception ex)
+                    {
+                        result.Warnings.Add($"Export block {block.Name}: {ex.Message.Split('\n')[0]}");
+                    }
+                }
+
+                // Export tag tables
+                foreach (PlcTagTable table in plc.TagTableGroup.TagTables.Cast<PlcTagTable>())
+                {
+                    var f = Path.Combine(exportDir, $"{device.Name}__TAGS__{table.Name}.xml");
+                    try
+                    {
+                        table.Export(new FileInfo(f), ExportOptions.WithDefaults);
+                        tagFiles.Add((device.Name, f));
+                        result.TagTablesExported++;
+                    }
+                    catch (Exception ex)
+                    {
+                        result.Warnings.Add($"Export tags {table.Name}: {ex.Message.Split('\n')[0]}");
+                    }
+                }
+            }
+
+            _log.LogInformation("Exported {B} blocks, {T} tag tables. Closing source project to create clone…",
+                result.BlocksExported, result.TagTablesExported);
+
+            // ── 2. Close source project (TIA only allows one project open at a time)
+            var originalPath = srcProject.Path.FullName;
+            srcProject.Save();
+            srcProject.Close();
+            _project = null;
+
+            // ── 3. Create new project ─────────────────────────────────────────
+            var dir = new DirectoryInfo(targetFolder);
+            dir.Create();
+            var newProject = _portal!.Projects.Create(dir, newName);
+            result.ProjectPath = Path.Combine(targetFolder, newName + ".ap20");
+
+            // ── 4. Recreate hardware ──────────────────────────────────────────
+            foreach (var (devName, typeId, ip) in deviceSnapshots)
+            {
+                if (string.IsNullOrWhiteSpace(typeId))
+                {
+                    result.Warnings.Add($"Skipped device '{devName}': no type identifier.");
+                    continue;
+                }
+                try
+                {
+                    var newDev = newProject.Devices.CreateWithItem(typeId, devName, devName);
+                    result.DevicesCreated++;
+                    if (!string.IsNullOrWhiteSpace(ip))
+                        SetIpOnDevice(newDev, ip);
+                }
+                catch (Exception ex)
+                {
+                    // Firmware version mismatch — retry without version suffix
+                    var baseId = System.Text.RegularExpressions.Regex.Replace(typeId, @"/V\d+\.\d+.*$", "");
+                    try
+                    {
+                        var newDev = newProject.Devices.CreateWithItem(baseId, devName, devName);
+                        result.DevicesCreated++;
+                        result.Warnings.Add($"Device '{devName}' created with base type (version stripped).");
+                        if (!string.IsNullOrWhiteSpace(ip))
+                            SetIpOnDevice(newDev, ip);
+                    }
+                    catch (Exception ex2)
+                    {
+                        result.Warnings.Add($"Could not create device '{devName}': {ex2.Message.Split('\n')[0]}");
+                    }
+                }
+            }
+
+            // ── 5. Import blocks ──────────────────────────────────────────────
+            foreach (var (devName, filePath) in blockFiles)
+            {
+                var plc = GetPlcFromProject(newProject, devName);
+                if (plc is null) { result.Warnings.Add($"No PLC found for device '{devName}' in new project."); continue; }
+                try
+                {
+                    plc.BlockGroup.Blocks.Import(new FileInfo(filePath), ImportOptions.Override);
+                    result.BlocksImported++;
+                }
+                catch (Exception ex)
+                {
+                    result.Warnings.Add($"Import block {Path.GetFileName(filePath)}: {ex.Message.Split('\n')[0]}");
+                }
+            }
+
+            // ── 6. Import tag tables ──────────────────────────────────────────
+            foreach (var (devName, filePath) in tagFiles)
+            {
+                var plc = GetPlcFromProject(newProject, devName);
+                if (plc is null) continue;
+                try
+                {
+                    plc.TagTableGroup.TagTables.Import(new FileInfo(filePath), ImportOptions.Override);
+                    result.TagTablesImported++;
+                }
+                catch (Exception ex)
+                {
+                    result.Warnings.Add($"Import tags {Path.GetFileName(filePath)}: {ex.Message.Split('\n')[0]}");
+                }
+            }
+
+            // ── 7. Save new project ───────────────────────────────────────────
+            newProject.Save();
+            result.Success = true;
+            _log.LogInformation("Clone complete → {Path}", result.ProjectPath);
+
+            // ── 8. Reopen the original project so the dashboard stays connected
+            try
+            {
+                _project = _portal!.Projects.Open(new FileInfo(originalPath));
+                _log.LogInformation("Reopened original project: {Path}", originalPath);
+            }
+            catch (Exception ex)
+            {
+                result.Warnings.Add($"Clone succeeded but could not reopen original project: {ex.Message.Split('\n')[0]}. Click Connect to reopen it manually.");
+                _project = newProject;
+            }
+
+            return result;
+        });
+    }
+
+    private static PlcSoftware? GetPlcFromDevice(Device device)
+    {
+        foreach (DeviceItem di in device.DeviceItems)
+        {
+            var sw = di.GetService<SoftwareContainer>()?.Software as PlcSoftware;
+            if (sw is not null) return sw;
+        }
+        return null;
+    }
+
+    private static PlcSoftware? GetPlcFromProject(Project project, string deviceName)
+    {
+        foreach (Device device in project.Devices)
+        {
+            if (!device.Name.Equals(deviceName, StringComparison.OrdinalIgnoreCase)) continue;
+            var plc = GetPlcFromDevice(device);
+            if (plc is not null) return plc;
+        }
+        return null;
+    }
+
+    private static string ReadIpFromDevice(Device device)
+    {
+        try
+        {
+            foreach (DeviceItem di in device.DeviceItems)
+            {
+                var ni = di.GetService<NetworkInterface>();
+                if (ni is null) continue;
+                foreach (Node n in ni.Nodes)
+                {
+                    var addr = n.GetAttribute("Address") as string;
+                    if (!string.IsNullOrWhiteSpace(addr)) return addr;
+                }
+            }
+        }
+        catch { }
+        return "";
+    }
+
+    private static void SetIpOnDevice(Device device, string ip)
+    {
+        try
+        {
+            foreach (DeviceItem di in device.DeviceItems)
+            {
+                var ni = di.GetService<NetworkInterface>();
+                if (ni is null) continue;
+                foreach (Node n in ni.Nodes)
+                {
+                    try { n.SetAttribute("Address", ip); } catch { }
+                    try { n.CreateAndConnectToSubnet("PN/IE_1"); } catch { }
+                }
+            }
+        }
+        catch { }
     }
 
     // ── Option packages ───────────────────────────────────────────────────────

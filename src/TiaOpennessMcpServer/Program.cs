@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Windows.Forms;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -7,6 +8,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using TiaOpennessMcpServer;
 using TiaOpennessMcpServer.Models;
 using TiaOpennessMcpServer.Services;
 using TiaOpennessMcpServer.Utilities;
@@ -53,11 +55,19 @@ var listener = new HttpListener();
 listener.Prefixes.Add("http://localhost:5000/");
 listener.Start();
 
-Console.WriteLine("TIA Portal Dashboard  →  http://localhost:5000/");
-Console.WriteLine("Press Ctrl+C to stop.");
-try { Process.Start(new ProcessStartInfo("http://localhost:5000") { UseShellExecute = true }); } catch { }
-
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; listener.Stop(); };
+
+// Launch the WinForms window on a dedicated STA thread (required by WinForms/COM)
+var uiThread = new System.Threading.Thread(() =>
+{
+    Application.EnableVisualStyles();
+    Application.SetCompatibleTextRenderingDefault(false);
+    Application.Run(new MainForm());
+    listener.Stop(); // stop the HTTP loop when the window is closed via tray "Exit"
+});
+uiThread.SetApartmentState(System.Threading.ApartmentState.STA);
+uiThread.IsBackground = false;
+uiThread.Start();
 
 var jsonOpts = new JsonSerializerOptions
 {
@@ -148,6 +158,18 @@ async Task HandleAsync(HttpListenerContext ctx)
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
+        // ── Block create ──────────────────────────────────────────────────────
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/blocks", out m))
+        {
+            try
+            {
+                var body = await ReadJson<BlockCreateRequest>(req);
+                if (body is null) { await Json(res, new { error = "Request body required." }, 400); return; }
+                await Json(res, await sw.CreateBlockAsync(m["device"], body));
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
         // ── Block SCL write ───────────────────────────────────────────────────
         else if (method == "PUT" && TryMatch(path, "/api/devices/{device}/blocks/{block}/scl", out m))
         {
@@ -206,6 +228,19 @@ async Task HandleAsync(HttpListenerContext ctx)
         }
 
         // ── Save project ──────────────────────────────────────────────────────
+        // ── Clone project ─────────────────────────────────────────────────────────
+        else if (method == "POST" && path == "/api/project/clone")
+        {
+            try
+            {
+                var body = await ReadJson<CloneRequest>(req);
+                if (string.IsNullOrWhiteSpace(body?.Name) || string.IsNullOrWhiteSpace(body?.Path))
+                { await Json(res, new { error = "name and path are required." }); return; }
+                await Json(res, await tia.CloneProjectAsync(body.Name, body.Path));
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
         // ── Option packages ───────────────────────────────────────────────────────
         else if (method == "GET" && path == "/api/project/options")
         {
@@ -295,3 +330,4 @@ class SclAnalyzeRequest { public string Source    { get; set; } = "";
                           public string BlockName { get; set; } = "Block";
                           public string BlockType { get; set; } = "FB"; }
 class XmlWriteRequest   { public string Content   { get; set; } = ""; }
+class CloneRequest      { public string Name      { get; set; } = ""; public string Path { get; set; } = ""; }

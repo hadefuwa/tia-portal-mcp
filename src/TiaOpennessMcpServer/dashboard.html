@@ -82,6 +82,13 @@ header{background:#161b22;border-bottom:2px solid #009abe;padding:10px 20px;disp
 .alert-warn{background:#241b08;border:1px solid #d29922;color:#d29922}
 .btn-danger{background:#6e1313;color:#fca5a5}
 .btn-danger:hover{filter:brightness(1.3)}
+.form-row{display:flex;flex-direction:column;gap:4px;margin-bottom:14px}
+.form-label{font-size:12px;color:#8b949e;font-weight:500}
+.form-input{background:#0d1117;border:1px solid #30363d;border-radius:5px;padding:8px 10px;color:#e6edf3;font-size:13px;width:100%}
+.form-input:focus{outline:none;border-color:#009abe}
+.clone-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:18px;max-width:580px}
+.warn-list{margin-top:10px;padding:10px 14px;background:#1a1208;border:1px solid #d29922;border-radius:6px;font-size:12px;color:#d29922;max-height:180px;overflow-y:auto}
+.warn-list li{margin-bottom:3px;list-style:disc;margin-left:14px}
 .pkg-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:14px}
 .pkg-table th{text-align:left;padding:9px 12px;border-bottom:2px solid #21262d;color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
 .pkg-table td{padding:9px 12px;border-bottom:1px solid #21262d;vertical-align:middle}
@@ -108,6 +115,34 @@ code.type{color:#d2a8ff;font-family:monospace;font-size:12px}
 .center h2{color:#009abe;font-size:22px}
 .center p{color:#8b949e;max-width:420px;font-size:14px;line-height:1.6}
 
+/* Docs */
+.doc-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;margin-top:6px}
+.doc-card{background:#161b22;border:1px solid #21262d;border-radius:10px;padding:18px 20px;cursor:pointer;transition:border-color .15s,background .15s}
+.doc-card:hover{border-color:#009abe;background:#0d1f2a}
+.doc-card-icon{font-size:26px;margin-bottom:10px}
+.doc-card-title{font-size:14px;font-weight:600;color:#e6edf3;margin-bottom:6px}
+.doc-card-desc{font-size:12px;color:#8b949e;line-height:1.6}
+.doc-h2{font-size:16px;font-weight:600;color:#e6edf3;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #21262d}
+.doc-h2:first-of-type{margin-top:0}
+.doc-p{font-size:13px;color:#8b949e;line-height:1.75;margin-bottom:12px}
+.doc-step{display:flex;gap:14px;margin-bottom:14px;align-items:flex-start}
+.doc-step-num{width:24px;height:24px;border-radius:50%;background:#009abe;color:#000;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.doc-step-body{flex:1}
+.doc-step-title{font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px}
+.doc-step-desc{font-size:13px;color:#8b949e;line-height:1.65}
+.doc-pre{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:14px 16px;font-family:'Consolas','Courier New',monospace;font-size:12px;color:#e6edf3;overflow-x:auto;margin:10px 0 16px;white-space:pre;line-height:1.6}
+.doc-inline{background:#1a1f26;padding:1px 6px;border-radius:4px;font-family:monospace;font-size:12px;color:#79c0ff}
+.doc-note{background:#0d1f2a;border:1px solid #1f6feb;border-radius:6px;padding:10px 14px;font-size:13px;color:#79c0ff;margin:12px 0 16px;line-height:1.6}
+.doc-warn{background:#241b08;border:1px solid #d29922;border-radius:6px;padding:10px 14px;font-size:13px;color:#d29922;margin:12px 0 16px;line-height:1.6}
+.doc-table{width:100%;border-collapse:collapse;font-size:12px;margin:10px 0 18px}
+.doc-table th{text-align:left;padding:8px 12px;border-bottom:2px solid #21262d;color:#8b949e;text-transform:uppercase;font-size:11px;letter-spacing:.4px}
+.doc-table td{padding:8px 12px;border-bottom:1px solid #21262d;vertical-align:top}
+.doc-table tr:hover td{background:#161b22}
+.doc-method{padding:2px 7px;border-radius:4px;font-family:monospace;font-size:11px;font-weight:700}
+.m-GET{background:#0a2010;color:#3fb950}.m-POST{background:#0a1020;color:#58a6ff}.m-PUT{background:#1a0a20;color:#bc8cff}
+.doc-back{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#8b949e;cursor:pointer;margin-bottom:18px;padding:4px 0}
+.doc-back:hover{color:#009abe}
+
 /* Scrollbar */
 ::-webkit-scrollbar{width:7px}
 ::-webkit-scrollbar-track{background:#0d1117}
@@ -132,6 +167,10 @@ code.type{color:#d2a8ff;font-family:monospace;font-size:12px}
   <div class="sidebar">
     <div class="sidebar-top">Explorer</div>
     <div class="tree" id="tree"><div class="loading">No project open</div></div>
+    <div style="border-top:1px solid #21262d;padding:4px 0">
+      <div class="tree-group">Help</div>
+      <div class="tree-item" id="ti-docs" onclick="showDocs()">📖 Documentation</div>
+    </div>
   </div>
   <div class="content" id="content">
     <div class="center">
@@ -197,7 +236,8 @@ async function buildTree() {
   projSec.innerHTML = `
     <div class="tree-group">Project</div>
     <div class="tree-item" onclick="showOverview(window._proj)">📊 Overview</div>
-    <div class="tree-item" id="ti-options" onclick="showOptionPackages()">📦 Option Packages</div>`;
+    <div class="tree-item" id="ti-options" onclick="showOptionPackages()">📦 Option Packages</div>
+    <div class="tree-item" id="ti-clone" onclick="showClone()">🔁 Clone Project</div>`;
   tree.appendChild(projSec);
   devices.forEach(dev => {
     const el = document.createElement('div');
@@ -409,6 +449,70 @@ async function showOptionPackages() {
   `);
 }
 
+function showClone() {
+  document.querySelectorAll('.tree-item').forEach(e => e.classList.remove('active'));
+  const ti = document.getElementById('ti-clone');
+  if (ti) ti.classList.add('active');
+  const proj = window._proj;
+  const suggestName = proj ? proj.name.replace(/\.ap\d+$/i,'') + '_clean' : 'MyProject_clean';
+  const suggestPath = proj ? proj.path.replace(/[^/\\]+$/, '').replace(/[/\\]$/, '') + '\\' + suggestName : 'C:\\TIA_Projects\\' + suggestName;
+  setContent(`
+    <div class="section-title">🔁 Clone Project</div>
+    <p style="color:#8b949e;font-size:13px;margin-bottom:20px">
+      Creates a fresh TIA Portal project by exporting every block and tag table from the current
+      project, then importing them into a new one. The new project will have no StartDrive dependency
+      and a clean used-products list.
+    </p>
+    <div class="clone-card">
+      <div class="form-row">
+        <label class="form-label">New project name</label>
+        <input class="form-input" id="clone-name" value="${h(suggestName)}" placeholder="MyProject_clean">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Destination folder (must not already contain a project with this name)</label>
+        <input class="form-input" id="clone-path" value="${h(suggestPath)}" placeholder="C:\\TIA_Projects\\MyProject_clean">
+      </div>
+      <div class="btn-row" style="margin-top:6px">
+        <button class="btn btn-green" id="clone-btn" onclick="runClone()">▶ Clone Now</button>
+        <span style="font-size:12px;color:#6e7681">This can take 1–3 minutes depending on project size.</span>
+      </div>
+    </div>
+    <div id="clone-out" style="margin-top:16px;display:none"></div>
+  `);
+}
+
+async function runClone() {
+  const name = document.getElementById('clone-name')?.value?.trim();
+  const path = document.getElementById('clone-path')?.value?.trim();
+  if (!name || !path) { alert('Please fill in both fields.'); return; }
+  const btn = document.getElementById('clone-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Cloning…'; }
+  const out = document.getElementById('clone-out');
+  if (out) { out.style.display = 'block'; out.innerHTML = '<div class="loading">Exporting blocks and tag tables… this may take a minute.</div>'; }
+  const r = await api('POST', '/api/project/clone', { name, path });
+  if (btn) { btn.disabled = false; btn.textContent = '▶ Clone Now'; }
+  if (!out) return;
+  if (r?.error) {
+    out.innerHTML = `<div class="compile-out err" style="display:block">❌ ${h(r.error)}</div>`;
+    return;
+  }
+  const warns = (r.warnings ?? []).map(w => `<li>${h(w)}</li>`).join('');
+  out.innerHTML = `
+    <div class="compile-out ok" style="display:block">
+      ✓ Clone complete!
+    </div>
+    <div class="clone-card" style="margin-top:14px">
+      ${row('New project', r.projectPath)}
+      ${row('Devices created', r.devicesCreated)}
+      ${row('Blocks imported', r.blocksImported + ' / ' + r.blocksExported + ' exported')}
+      ${row('Tag tables imported', r.tagTablesImported + ' / ' + r.tagTablesExported + ' exported')}
+    </div>
+    ${warns ? `<div class="warn-list"><b>Warnings (${r.warnings.length}):</b><ul>${warns}</ul></div>` : ''}
+    <p style="color:#8b949e;font-size:13px;margin-top:14px">
+      Open the new project in TIA Portal to verify, then compile (Ctrl+B) before downloading to the PLC.
+    </p>`;
+}
+
 async function compile(device, blockName) {
   showOutput('Compiling…', 'ok');
   const r = await api('POST', `/api/devices/${enc(device)}/blocks/${enc(blockName)}/compile`);
@@ -432,6 +536,335 @@ function showOutput(text, cls) {
   if (!el) return;
   el.textContent = text;
   el.className = 'compile-out ' + cls;
+}
+
+// ── Docs ───────────────────────────────────────────────────────────────────────
+function showDocs() {
+  document.querySelectorAll('.tree-item').forEach(e => e.classList.remove('active'));
+  const ti = document.getElementById('ti-docs');
+  if (ti) ti.classList.add('active');
+  setContent(`
+    <div class="section-title">📖 Documentation</div>
+    <p class="doc-p">Guides for working with TIA Portal via this dashboard and the REST API.</p>
+    <div class="doc-cards">
+      <div class="doc-card" onclick="showDoc('vscode')">
+        <div class="doc-card-icon">💻</div>
+        <div class="doc-card-title">VS Code Workflow</div>
+        <div class="doc-card-desc">Write SCL in VS Code and push it live into your TIA Portal project. Create new FBs and FCs without leaving your editor.</div>
+      </div>
+      <div class="doc-card" onclick="showDoc('api')">
+        <div class="doc-card-icon">🔌</div>
+        <div class="doc-card-title">REST API Reference</div>
+        <div class="doc-card-desc">Full list of HTTP endpoints exposed by the dashboard server. Use from any tool — curl, Postman, scripts, or other apps.</div>
+      </div>
+      <div class="doc-card" onclick="showDoc('scl')">
+        <div class="doc-card-icon">📝</div>
+        <div class="doc-card-title">SCL Quick Reference</div>
+        <div class="doc-card-desc">Structured Control Language syntax for S7-1200. Block structure, data types, timers, and common patterns.</div>
+      </div>
+    </div>
+  `);
+}
+
+function showDoc(id) {
+  document.querySelectorAll('.tree-item').forEach(e => e.classList.remove('active'));
+  const ti = document.getElementById('ti-docs');
+  if (ti) ti.classList.add('active');
+
+  if (id === 'vscode')   { showDocVsCode();   return; }
+  if (id === 'api')      { showDocApi();       return; }
+  if (id === 'scl')      { showDocScl();       return; }
+}
+
+function docBack() {
+  return `<div class="doc-back" onclick="showDocs()">&#8592; Back to Documentation</div>`;
+}
+
+function showDocVsCode() {
+  setContent(`
+    ${docBack()}
+    <div class="section-title">💻 VS Code Workflow</div>
+    <p class="doc-p">
+      Write SCL code in VS Code and push it directly into your running TIA Portal project — no copy-pasting, no file browsing.
+      The dashboard REST API handles the transfer; two VS Code features wire it up: <span class="doc-inline">tasks.json</span> for keyboard-shortcut commands and a <span class="doc-inline">.http</span> file for one-off calls.
+    </p>
+
+    <div class="doc-h2">Prerequisites</div>
+    <div class="doc-step">
+      <div class="doc-step-num">1</div>
+      <div class="doc-step-body">
+        <div class="doc-step-title">Dashboard server running</div>
+        <div class="doc-step-desc">The server must be running on <span class="doc-inline">http://localhost:5000</span>. Start it with <span class="doc-inline">dotnet run</span> from <span class="doc-inline">src/TiaOpennessMcpServer/</span>, or run the built <span class="doc-inline">.exe</span> directly.</div>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-step-num">2</div>
+      <div class="doc-step-body">
+        <div class="doc-step-title">TIA Portal connected</div>
+        <div class="doc-step-desc">Open your project in TIA Portal V20, then click <b>Connect</b> in this dashboard. The status dot in the header turns green when the link is live.</div>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-step-num">3</div>
+      <div class="doc-step-body">
+        <div class="doc-step-title">Install REST Client extension (optional but recommended)</div>
+        <div class="doc-step-desc">In VS Code, search for <span class="doc-inline">humao.rest-client</span> and install it. This lets you click <b>Send Request</b> inside the <span class="doc-inline">tia-api.http</span> file included in the project root.</div>
+      </div>
+    </div>
+
+    <div class="doc-h2">Pushing SCL to an existing block</div>
+    <p class="doc-p">Name your file after the block — e.g. <span class="doc-inline">MyFB.scl</span>. The VS Code task reads the filename and uses it as the block name.</p>
+    <div class="doc-step">
+      <div class="doc-step-num">1</div>
+      <div class="doc-step-body">
+        <div class="doc-step-title">Open your <span class="doc-inline">.scl</span> file in VS Code</div>
+        <div class="doc-step-desc">Write or edit your SCL code. The file can live anywhere — it does not need to be inside the TIA project folder.</div>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-step-num">2</div>
+      <div class="doc-step-body">
+        <div class="doc-step-title">Run the task</div>
+        <div class="doc-step-desc">Press <span class="doc-inline">Ctrl+Shift+P</span>, type <b>Run Task</b>, select <b>Push SCL to TIA Portal</b>. Enter your device name when prompted (e.g. <span class="doc-inline">PLC_1</span>).</div>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-step-num">3</div>
+      <div class="doc-step-body">
+        <div class="doc-step-title">Check the terminal</div>
+        <div class="doc-step-desc">The integrated terminal shows the API response. A <span class="doc-inline">success: true</span> result means the block source was updated in TIA Portal. Refresh the block view here to confirm.</div>
+      </div>
+    </div>
+    <div class="doc-note">&#9432; The block must already exist in TIA Portal. To create a new one first, see the <b>Creating a new block</b> section below.</div>
+
+    <div class="doc-h2">Creating a new block</div>
+    <p class="doc-p">The <b>Create Block in TIA Portal</b> task creates a new FB, FC, OB, or GlobalDB and imports your file's content as its source in one step.</p>
+    <div class="doc-step">
+      <div class="doc-step-num">1</div>
+      <div class="doc-step-body">
+        <div class="doc-step-title">Write your SCL in a new file</div>
+        <div class="doc-step-desc">Name the file after the block you want to create, e.g. <span class="doc-inline">MotorControl.scl</span>. Include the full block structure:</div>
+      </div>
+    </div>
+<pre class="doc-pre">FUNCTION_BLOCK "MotorControl"
+VAR
+  Running  : BOOL;
+  Speed    : INT;
+END_VAR
+
+// Your logic here
+
+END_FUNCTION_BLOCK</pre>
+    <div class="doc-step">
+      <div class="doc-step-num">2</div>
+      <div class="doc-step-body">
+        <div class="doc-step-title">Run <b>Create Block in TIA Portal</b></div>
+        <div class="doc-step-desc"><span class="doc-inline">Ctrl+Shift+P</span> &rarr; <b>Run Task</b> &rarr; <b>Create Block in TIA Portal</b>. You'll be asked for the device name and block type (FB, FC, OB, GlobalDB).</div>
+      </div>
+    </div>
+    <div class="doc-step">
+      <div class="doc-step-num">3</div>
+      <div class="doc-step-body">
+        <div class="doc-step-title">Compile</div>
+        <div class="doc-step-desc">Run <b>Compile Block in TIA Portal</b> from the task list, or open the block in this dashboard and click <b>&#9654; Compile</b>.</div>
+      </div>
+    </div>
+
+    <div class="doc-h2">Using the .http file (REST Client)</div>
+    <p class="doc-p">The file <span class="doc-inline">tia-api.http</span> in the project root contains ready-made requests for every endpoint. Open it in VS Code with the REST Client extension installed and click <b>Send Request</b> above any block.</p>
+    <p class="doc-p">Change the variables at the top of the file to match your device and block names:</p>
+<pre class="doc-pre">@base   = http://localhost:5000
+@device = PLC_1
+@block  = MotorControl</pre>
+    <div class="doc-warn">&#9888; The REST Client sends requests immediately — double-check <span class="doc-inline">@device</span> and <span class="doc-inline">@block</span> before sending a write or create request.</div>
+
+    <div class="doc-h2">Available VS Code tasks</div>
+    <table class="doc-table">
+      <thead><tr><th>Task name</th><th>What it does</th><th>Prompts for</th></tr></thead>
+      <tbody>
+        <tr><td><b>Push SCL to TIA Portal</b></td><td>Writes the open file's content to an existing block's SCL source</td><td>Device name</td></tr>
+        <tr><td><b>Create Block in TIA Portal</b></td><td>Creates a new block and imports the open file as its source</td><td>Device name, block type</td></tr>
+        <tr><td><b>Compile Block in TIA Portal</b></td><td>Triggers compilation and prints the result to the terminal</td><td>Device name</td></tr>
+        <tr><td><b>Save TIA Portal Project</b></td><td>Saves the open TIA Portal project (same as 💾 Save in the header)</td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <div class="doc-h2">Typical editing loop</div>
+<pre class="doc-pre">1.  Edit MyFB.scl in VS Code
+2.  Ctrl+Shift+P → Run Task → Push SCL to TIA Portal
+3.  Ctrl+Shift+P → Run Task → Compile Block in TIA Portal
+4.  (if needed) Fix errors, repeat steps 2–3
+5.  Ctrl+Shift+P → Run Task → Save TIA Portal Project</pre>
+  `);
+}
+
+function showDocApi() {
+  setContent(`
+    ${docBack()}
+    <div class="section-title">🔌 REST API Reference</div>
+    <p class="doc-p">All endpoints are served at <span class="doc-inline">http://localhost:5000</span>. Every response is JSON. Errors return <span class="doc-inline">&#123; "error": "message" &#125;</span>.</p>
+
+    <div class="doc-h2">Connection</div>
+    <table class="doc-table">
+      <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><span class="doc-method m-GET">GET</span></td><td><span class="doc-inline">/api/status</span></td><td>Returns connection state and project info if connected</td></tr>
+        <tr><td><span class="doc-method m-POST">POST</span></td><td><span class="doc-inline">/api/connect</span></td><td>Attaches to the running TIA Portal instance</td></tr>
+        <tr><td><span class="doc-method m-POST">POST</span></td><td><span class="doc-inline">/api/project/save</span></td><td>Saves the open project</td></tr>
+        <tr><td><span class="doc-method m-GET">GET</span></td><td><span class="doc-inline">/api/project/options</span></td><td>Lists installed option packages / used products</td></tr>
+      </tbody>
+    </table>
+
+    <div class="doc-h2">Devices</div>
+    <table class="doc-table">
+      <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><span class="doc-method m-GET">GET</span></td><td><span class="doc-inline">/api/devices</span></td><td>Lists all devices in the project</td></tr>
+      </tbody>
+    </table>
+
+    <div class="doc-h2">Blocks</div>
+    <table class="doc-table">
+      <thead><tr><th>Method</th><th>Path</th><th>Description</th><th>Body</th></tr></thead>
+      <tbody>
+        <tr><td><span class="doc-method m-GET">GET</span></td><td><span class="doc-inline">/api/devices/{device}/blocks</span></td><td>Lists all blocks on a device</td><td>—</td></tr>
+        <tr><td><span class="doc-method m-GET">GET</span></td><td><span class="doc-inline">/api/devices/{device}/blocks/{block}</span></td><td>Reads block info + SCL source + raw XML</td><td>—</td></tr>
+        <tr><td><span class="doc-method m-POST">POST</span></td><td><span class="doc-inline">/api/devices/{device}/blocks</span></td><td>Creates a new block</td><td><span class="doc-inline">&#123; name, type, language, number?, sourceCode &#125;</span></td></tr>
+        <tr><td><span class="doc-method m-PUT">PUT</span></td><td><span class="doc-inline">/api/devices/{device}/blocks/{block}/scl</span></td><td>Overwrites an existing block's SCL source</td><td><span class="doc-inline">&#123; source: "..." &#125;</span></td></tr>
+        <tr><td><span class="doc-method m-POST">POST</span></td><td><span class="doc-inline">/api/devices/{device}/blocks/{block}/xml</span></td><td>Imports raw XML export directly</td><td><span class="doc-inline">&#123; content: "..." &#125;</span></td></tr>
+        <tr><td><span class="doc-method m-POST">POST</span></td><td><span class="doc-inline">/api/devices/{device}/blocks/{block}/compile</span></td><td>Compiles the block and returns the compiler output</td><td>—</td></tr>
+        <tr><td><span class="doc-method m-POST">POST</span></td><td><span class="doc-inline">/api/devices/{device}/blocks/{block}/analyze</span></td><td>Runs static SCL analysis and returns findings</td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <div class="doc-h2">Tag Tables</div>
+    <table class="doc-table">
+      <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><span class="doc-method m-GET">GET</span></td><td><span class="doc-inline">/api/devices/{device}/tags</span></td><td>Lists all tag tables on a device</td></tr>
+        <tr><td><span class="doc-method m-GET">GET</span></td><td><span class="doc-inline">/api/devices/{device}/tags/{table}</span></td><td>Lists all tags in a specific table</td></tr>
+      </tbody>
+    </table>
+
+    <div class="doc-h2">Block create body fields</div>
+    <table class="doc-table">
+      <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Values</th></tr></thead>
+      <tbody>
+        <tr><td><span class="doc-inline">name</span></td><td>string</td><td>Yes</td><td>Block name as it appears in TIA Portal</td></tr>
+        <tr><td><span class="doc-inline">type</span></td><td>string</td><td>Yes</td><td><span class="doc-inline">FB</span>, <span class="doc-inline">FC</span>, <span class="doc-inline">OB</span>, <span class="doc-inline">GlobalDB</span></td></tr>
+        <tr><td><span class="doc-inline">language</span></td><td>string</td><td>Yes</td><td><span class="doc-inline">SCL</span> (LAD/FBD not supported for creation)</td></tr>
+        <tr><td><span class="doc-inline">number</span></td><td>int or null</td><td>No</td><td>Block number — leave <span class="doc-inline">null</span> to auto-assign</td></tr>
+        <tr><td><span class="doc-inline">sourceCode</span></td><td>string</td><td>Yes</td><td>Full SCL source text for the block</td></tr>
+      </tbody>
+    </table>
+  `);
+}
+
+function showDocScl() {
+  setContent(`
+    ${docBack()}
+    <div class="section-title">📝 SCL Quick Reference</div>
+    <p class="doc-p">Structured Control Language (SCL) is an IEC 61131-3 high-level language for S7 PLCs. It looks like Pascal and compiles to the same bytecode as LAD/FBD.</p>
+
+    <div class="doc-h2">Block structure</div>
+<pre class="doc-pre">// Function Block — has instance DB, retains state between calls
+FUNCTION_BLOCK "MyFB"
+VAR          // Static (retained between calls)
+  counter : INT := 0;
+END_VAR
+VAR_INPUT    // Read by caller
+  enable : BOOL;
+END_VAR
+VAR_OUTPUT   // Written by this block
+  done : BOOL;
+END_VAR
+VAR_TEMP     // Scratch — lost after each call
+  tmp : INT;
+END_VAR
+
+IF enable THEN
+  counter := counter + 1;
+END_IF;
+done := (counter &gt;= 10);
+
+END_FUNCTION_BLOCK
+
+
+// Function — no instance DB, stateless, returns a value
+FUNCTION "Clamp" : INT
+VAR_INPUT lo, hi, val : INT; END_VAR
+IF val &lt; lo THEN Clamp := lo;
+ELSIF val &gt; hi THEN Clamp := hi;
+ELSE Clamp := val;
+END_IF;
+END_FUNCTION</pre>
+
+    <div class="doc-h2">Common data types</div>
+    <table class="doc-table">
+      <thead><tr><th>Type</th><th>Size</th><th>Range / notes</th></tr></thead>
+      <tbody>
+        <tr><td><span class="doc-inline">BOOL</span></td><td>1 bit</td><td>TRUE / FALSE</td></tr>
+        <tr><td><span class="doc-inline">INT</span></td><td>16 bit</td><td>-32 768 … 32 767</td></tr>
+        <tr><td><span class="doc-inline">DINT</span></td><td>32 bit</td><td>-2 147 483 648 … 2 147 483 647</td></tr>
+        <tr><td><span class="doc-inline">REAL</span></td><td>32 bit</td><td>IEEE 754 float</td></tr>
+        <tr><td><span class="doc-inline">TIME</span></td><td>32 bit</td><td>e.g. <span class="doc-inline">T#1s500ms</span></td></tr>
+        <tr><td><span class="doc-inline">STRING</span></td><td>variable</td><td><span class="doc-inline">STRING[254]</span> — max 254 chars</td></tr>
+        <tr><td><span class="doc-inline">ARRAY[0..9] OF INT</span></td><td>varies</td><td>Zero-indexed array of any type</td></tr>
+      </tbody>
+    </table>
+
+    <div class="doc-h2">Control flow</div>
+<pre class="doc-pre">// IF
+IF x &gt; 0 THEN
+  y := 1;
+ELSIF x = 0 THEN
+  y := 0;
+ELSE
+  y := -1;
+END_IF;
+
+// CASE
+CASE state OF
+  0: doInit();
+  1: doRun();
+  2, 3: doStop();
+  ELSE: doError();
+END_CASE;
+
+// FOR
+FOR i := 0 TO 9 DO
+  arr[i] := i * 2;
+END_FOR;
+
+// WHILE
+WHILE NOT done DO
+  step();
+END_WHILE;
+
+// Calling a function block (needs instance DB)
+"myMotor"(enable := startBtn, speed := setpoint);
+done := "myMotor".done;</pre>
+
+    <div class="doc-h2">Timers (IEC)</div>
+<pre class="doc-pre">VAR
+  tOn : TON;   // On-delay
+END_VAR
+
+tOn(IN := trigger, PT := T#2s);
+IF tOn.Q THEN
+  // 2 seconds have elapsed since trigger went TRUE
+END_IF;</pre>
+    <div class="doc-note">&#9432; TON, TOF, and TP are function blocks — they require an instance (VAR declaration). Call them every scan with the same instance variable.</div>
+
+    <div class="doc-h2">Tips for S7-1200</div>
+    <ul style="color:#8b949e;font-size:13px;line-height:2;padding-left:18px;margin-bottom:16px">
+      <li>Use <span class="doc-inline">DINT</span> for counters that might exceed 32 767 — <span class="doc-inline">INT</span> wraps silently</li>
+      <li>Avoid <span class="doc-inline">RETURN</span> in the middle of large blocks — it can make code hard to follow and harder to analyze</li>
+      <li>Global DB tags are accessible as <span class="doc-inline">"MyDB".tagName</span> from any block</li>
+      <li>Symbolic addressing (tag names) is preferred over absolute addresses (<span class="doc-inline">%M0.0</span>) in TIA V13+</li>
+      <li>Compile often — the S7-1200 compiler gives precise line-number errors, making it easy to spot issues early</li>
+    </ul>
+  `);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
