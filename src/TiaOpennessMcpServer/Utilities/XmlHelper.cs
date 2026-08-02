@@ -83,16 +83,6 @@ public static class XmlHelper
                   <ProgrammingLanguage>SCL</ProgrammingLanguage>
                 </AttributeList>
                 <ObjectList>
-                  <MultilingualText ID="1" CompositionName="Comment">
-                    <ObjectList>
-                      <MultilingualTextItem ID="2" CompositionName="Items">
-                        <AttributeList>
-                          <Culture>en-US</Culture>
-                          <Text />
-                        </AttributeList>
-                      </MultilingualTextItem>
-                    </ObjectList>
-                  </MultilingualText>
                   <SW.Blocks.CompileUnit ID="3" CompositionName="CompileUnits">
                     <AttributeList>
                       <NetworkSource>
@@ -135,7 +125,7 @@ public static class XmlHelper
             <?xml version="1.0" encoding="utf-8"?>
             <Document>
               <Engineering version="V20" />
-              <SW.Blocks.GlobalDB ID="0" Namespace=""{number}>
+              <SW.Blocks.GlobalDB ID="0"{number}>
                 <AttributeList>
                   <AutoNumber>{autoNum}</AutoNumber>
                   <Interface>
@@ -146,20 +136,10 @@ public static class XmlHelper
                     </Sections>
                   </Interface>
                   <Name>{SecurityElement.Escape(blockName)}</Name>
+                  <Namespace />
                   <ProgrammingLanguage>DB</ProgrammingLanguage>
                 </AttributeList>
-                <ObjectList>
-                  <MultilingualText ID="1" CompositionName="Comment">
-                    <ObjectList>
-                      <MultilingualTextItem ID="2" CompositionName="Items">
-                        <AttributeList>
-                          <Culture>en-US</Culture>
-                          <Text />
-                        </AttributeList>
-                      </MultilingualTextItem>
-                    </ObjectList>
-                  </MultilingualText>
-                </ObjectList>
+                <ObjectList />
               </SW.Blocks.GlobalDB>
             </Document>
             """;
