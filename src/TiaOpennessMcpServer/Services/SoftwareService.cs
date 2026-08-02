@@ -134,8 +134,9 @@ public sealed class SoftwareService
             var plc = GetPlcSoftware(deviceName);
 
             Directory.CreateDirectory(_opts.ExportDirectory);
-            var xmlContent = XmlHelper.CreateSclBlockXml(
-                req.Name, req.Type.ToString(), req.Number, req.SourceCode);
+            var xmlContent = req.Type == Models.BlockType.GlobalDB
+                ? XmlHelper.CreateGlobalDbXml(req.Name, req.Number, req.SourceCode)
+                : XmlHelper.CreateSclBlockXml(req.Name, req.Type.ToString(), req.Number, req.SourceCode);
 
             var importFile = Path.Combine(_opts.ExportDirectory,
                 $"create_{deviceName}_{req.Name}.xml");
@@ -191,6 +192,27 @@ public sealed class SoftwareService
                 $"Warnings: {result.WarningCount}",
                 "",
                 string.Join("\n", messages));
+        });
+    }
+
+    // ── Create Instance DB ────────────────────────────────────────────────────
+
+    public async Task<Models.BlockInfo> CreateInstanceDbAsync(
+        string deviceName, string name, string instanceOfName, int? number)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var plc     = GetPlcSoftware(deviceName);
+            var xml     = XmlHelper.CreateInstanceDbXml(name, instanceOfName, number);
+            var path    = Path.Combine(_opts.ExportDirectory, $"create_{deviceName}_{name}_idb.xml");
+            Directory.CreateDirectory(_opts.ExportDirectory);
+            File.WriteAllText(path, xml, System.Text.Encoding.UTF8);
+            plc.BlockGroup.Blocks.Import(new FileInfo(path), ImportOptions.Override);
+            var block = FindBlock(plc.BlockGroup, name);
+            _log.LogInformation("Created InstanceDB {Name} (of {FB}) on {Device}.",
+                name, instanceOfName, deviceName);
+            return BlockToInfo(block);
         });
     }
 

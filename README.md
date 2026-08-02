@@ -2,9 +2,22 @@
 
 A desktop app that lets you read and edit your TIA Portal V20 project through a built-in browser window — no extra software or cloud connection needed. It connects to TIA Portal while it's running on your PC and opens a native Windows window at startup.
 
-> **Who is this for?** Anyone working with Siemens S7 PLCs who wants a faster way to browse blocks, view/edit SCL code, inspect tag tables, and manage their project — without clicking through TIA Portal menus.
+> **Who is this for?** Anyone working with Siemens S7 PLCs who wants a faster way to browse blocks, view/edit SCL code, inspect tag tables, and manage their project — without clicking through TIA Portal menus. It also exposes all tools to Claude AI via MCP so you can describe changes in plain English and have Claude implement them.
 
 > **New to TIA Portal Openness?** See [What is TIA Portal Openness?](docs/what-is-tia-openness.md) for a plain-English explanation of the API this project is built on.
+
+> **Ready to use?** See the [User Manual](docs/user-manual.md) for a full walkthrough of both operating modes.
+
+---
+
+## Two modes
+
+| Mode | Tab | How to use it |
+|------|-----|---------------|
+| **User Control** | Left tab | Fill in fields and click Run — fully manual, no AI |
+| **Agent Control** | Right tab | Claude calls tools automatically via MCP — describe what you want in plain English |
+
+Both modes talk to the same REST server and the same TIA Portal connection.
 
 ---
 
@@ -17,10 +30,16 @@ A desktop app that lets you read and edit your TIA Portal V20 project through a 
 | **Raw XML editor** | View and import block XML for any language (LAD, FBD, STL, GRAPH) |
 | **Compile blocks** | Trigger compilation and see the result inline |
 | **Analyse SCL** | Scan SCL code for issues (unbalanced blocks, nested IFs, etc.) |
+| **Create blocks** | Generate new FB, FC, OB, or GlobalDB from SCL source |
+| **Create instance DBs** | Create a new Instance DB linked to any FB |
 | **Browse tag tables** | See every tag, its data type, address, and comment |
+| **Import tag tables** | Import a complete tag table from SimaticML XML |
+| **Batch rename tags** | Rename many tags at once in a single atomic operation |
+| **Project signature** | Full index of every block and tag table across all devices |
 | **Clone project** | Duplicate the open project to a new folder with all hardware, blocks, and tags |
 | **Used products** | List the products/option packs the project references (e.g. StartDrive, Safety) |
 | **Save project** | Save the TIA Portal project without switching to TIA Portal |
+| **Claude integration** | All tools exposed via MCP so Claude can call them automatically |
 
 ---
 
@@ -86,47 +105,50 @@ The first time TIA Portal Openness is used it will show an access approval dialo
 
 ## How to use it
 
-### Browsing blocks
+See the [User Manual](docs/user-manual.md) for a full walkthrough of both the User Control and Agent Control tabs, with a reference for every tool.
 
-Once connected, your PLC devices appear in the left sidebar. Click a device name to expand it and see its blocks. Click any block to open it in the main panel.
+### Quick start — User Control (manual)
 
-### Editing SCL code
+Once connected, your PLC devices appear in the left sidebar. Click a device to expand it. Click **Blocks** to list all blocks; click any block name to read it. Use **Run Tool** in the sidebar to access all tools with a form interface.
 
-SCL blocks show a code editor. Make your changes and click **Save SCL** to write the code back to TIA Portal. Then click **Compile** to check for errors.
+### Quick start — Agent Control (Claude)
 
-> Only SCL blocks have readable source code via the TIA Portal Openness API. LAD, FBD, STL, and GRAPH blocks are stored as graphical data — you can still view and edit their raw XML (see below).
+1. Switch to the **Agent Control** tab in the dashboard.
+2. Copy the MCP config snippet shown there and paste it into Claude Desktop's developer config.
+3. Restart Claude Desktop.
+4. In a new conversation, ask Claude to do something: *"List the blocks on PLC_1"*, *"Create an FB called SpeedControl with a ramp function"*, *"Rename all tags in the IO_Mapping table — prefix with HMI_"*.
 
-### Raw XML editing
+Claude calls the tools automatically and shows you every step.
 
-Every block — regardless of language — can be viewed as XML. For SCL blocks, switch to the **Raw XML** tab. For LAD/graphical blocks the XML view is shown by default.
+---
 
-Edit the XML in the browser, then click **Save XML** to import it back into TIA Portal. This is equivalent to exporting a block, editing the file, and reimporting it.
+## Connecting Claude Desktop (MCP setup)
 
-> Invalid XML will fail to import and TIA Portal will show an error — always check your edits before saving.
+The dashboard exposes all tools over MCP (Model Context Protocol) on `http://localhost:5000/mcp`. Claude Desktop connects to it as a **Custom Connector** — not via the config file.
 
-### Cloning a project
+### Step 1 — Add the connector in Claude Desktop UI
 
-Click **Clone Project** in the sidebar to duplicate the currently open project. Give the clone a name and choose a destination folder. The dashboard will:
+1. Open Claude Desktop → **Settings** → **Connectors** → **Add custom connector**
+2. Enter the URL: `http://localhost:5000/mcp`
+3. Save and restart Claude Desktop
 
-1. Export all blocks and tag tables from the source project
-2. Close the source project temporarily (required by TIA Portal — only one project can be open at a time)
-3. Create the new project and recreate the hardware configuration
-4. Import all blocks and tag tables into the new project
-5. Reopen the original project so you can keep working
+> **Do not use the config file for this.** Claude Desktop's `claude_desktop_config.json` only supports `stdio` transport (local executables). HTTP MCP servers must be added through the Connectors UI. If you add `"type": "http"` to the config file, Claude Desktop will not recognise it and the tools will not appear.
 
-> After cloning, the dashboard reconnects to the original project automatically.
+### Step 2 — Verify tools appear
 
-### Viewing tag tables
+Start a new conversation in Claude Desktop. Click the tools/hammer icon — you should see all 20 TIA Portal tools listed. If they don't appear, see the MCP troubleshooting section below.
 
-Click **Load tables** under a device's Tag Tables section in the sidebar. Click a table name to view every tag with its type, address, and comment.
+### What the server reports
 
-### Used products
-
-Click **Option Packages** in the sidebar to see which Siemens products the project references. This list comes directly from the project file and is read-only — to remove a product dependency you need to do it inside TIA Portal.
+- **URL**: `http://localhost:5000/mcp`
+- **Protocol version**: MCP `2025-03-26` (with automatic fallback to `2024-11-05` for older clients)
+- **Transport**: Streamable HTTP (POST to `/mcp`)
 
 ---
 
 ## Troubleshooting
+
+### App / TIA Portal
 
 **"Security error — not a member of Siemens TIA Openness group"**
 Complete setup step 3. Make sure you signed out and back in after being added to the group.
@@ -145,6 +167,27 @@ The project expects TIA Portal V20 at the default path (`C:\Program Files\Siemen
 
 **The window doesn't open / WebView2 error**
 Make sure Microsoft Edge is installed and up to date. The built-in browser window uses the Edge WebView2 runtime, which ships with Edge on Windows 10/11.
+
+### MCP / Claude Desktop
+
+**Tools don't appear in Claude Desktop after adding the connector**
+- Confirm the dashboard app is running (the MCP server only runs while the app is open).
+- Make sure you added the connector via **Settings → Connectors → Add custom connector**, not via the config file. HTTP connectors added to `claude_desktop_config.json` are silently ignored.
+- Restart Claude Desktop after adding the connector — it only loads tools at startup.
+- Open a browser and navigate to `http://localhost:5000/mcp`. You should get a `405 Method Not Allowed` JSON response. If you get a connection error, the app is not running.
+
+**The connector shows "connected" but no tools appear**
+This is usually a protocol version mismatch. The server implements MCP `2025-03-26`. If you are using an older Claude Desktop build that sends `2024-11-05` in its `initialize` request, the server will negotiate down automatically. If tools still don't appear, check the Live call log in the Agent Control tab to see if any `initialize` calls are arriving.
+
+**"type": "http" in claude_desktop_config.json doesn't work**
+Claude Desktop's config file (`%APPDATA%\Claude\claude_desktop_config.json`) only supports `stdio` entries — local executables started by Claude Desktop. HTTP MCP servers are not supported via this file. Use the Connectors UI instead (Settings → Connectors).
+
+**My code changes aren't reflected after restarting the app**
+The desktop shortcut (`Start TIA Dashboard.bat`) automatically checks whether any source file (`.cs`, `.csproj`, `dashboard.html`) is newer than the compiled exe and rebuilds before launching. If the build fails, the bat window will pause and show the error — fix it and run the shortcut again. To build manually:
+
+```bash
+dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj --configuration Release
+```
 
 ---
 
@@ -187,6 +230,7 @@ src/TiaOpennessMcpServer/
 
 ## Further reading
 
+- [User Manual](docs/user-manual.md) — full guide to both tabs, all tools, MCP setup, and troubleshooting
 - [What is TIA Portal Openness?](docs/what-is-tia-openness.md) — plain-English guide to the API
 - [Siemens TIA Portal Openness documentation](https://support.industry.siemens.com/cs/document/109792902) — official Siemens overview and links
 - [TIA Portal Openness system manual (PDF)](https://support.industry.siemens.com/cs/ww/en/view/109748523) — full API reference

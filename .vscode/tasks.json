@@ -1,0 +1,72 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Push SCL to TIA Portal",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NonInteractive",
+        "-Command",
+        "$device = '${input:deviceName}'; $block = [System.IO.Path]::GetFileNameWithoutExtension('${file}'); $src = Get-Content '${file}' -Raw -Encoding UTF8; $body = [System.Text.Json.JsonSerializer]::Serialize(@{ source = $src }); $r = Invoke-RestMethod -Uri \"http://localhost:5000/api/devices/$device/blocks/$block/scl\" -Method PUT -Body $body -ContentType 'application/json'; Write-Host ($r | ConvertTo-Json)"
+      ],
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Create Block in TIA Portal",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NonInteractive",
+        "-Command",
+        "$device = '${input:deviceName}'; $block = [System.IO.Path]::GetFileNameWithoutExtension('${file}'); $type = '${input:blockType}'; $src = Get-Content '${file}' -Raw -Encoding UTF8; $body = [System.Text.Json.JsonSerializer]::Serialize(@{ name = $block; type = $type; language = 'SCL'; number = $null; sourceCode = $src }); $r = Invoke-RestMethod -Uri \"http://localhost:5000/api/devices/$device/blocks\" -Method POST -Body $body -ContentType 'application/json'; Write-Host ($r | ConvertTo-Json)"
+      ],
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Compile Block in TIA Portal",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NonInteractive",
+        "-Command",
+        "$device = '${input:deviceName}'; $block = [System.IO.Path]::GetFileNameWithoutExtension('${file}'); $r = Invoke-RestMethod -Uri \"http://localhost:5000/api/devices/$device/blocks/$block/compile\" -Method POST; Write-Host ($r.result)"
+      ],
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Save TIA Portal Project",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NonInteractive",
+        "-Command",
+        "Invoke-RestMethod -Uri 'http://localhost:5000/api/project/save' -Method POST | ConvertTo-Json"
+      ],
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "deviceName",
+      "description": "TIA Portal device name (e.g. PLC_1)",
+      "default": "PLC_1",
+      "type": "promptString"
+    },
+    {
+      "id": "blockType",
+      "description": "Block type: FB, FC, OB, or GlobalDB",
+      "default": "FB",
+      "type": "pickString",
+      "options": ["FB", "FC", "OB", "GlobalDB"]
+    }
+  ]
+}

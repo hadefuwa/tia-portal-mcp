@@ -1,0 +1,41 @@
+@base = http://localhost:5000
+@device = PLC_1
+@block = MyFB
+
+### Check connection
+GET {{base}}/api/status
+
+### List devices
+GET {{base}}/api/devices
+
+### List blocks on device
+GET {{base}}/api/devices/{{device}}/blocks
+
+### Read a block (gets SCL source + XML)
+GET {{base}}/api/devices/{{device}}/blocks/{{block}}
+
+### Create a new FB (SCL)
+POST {{base}}/api/devices/{{device}}/blocks
+Content-Type: application/json
+
+{
+  "name": "{{block}}",
+  "type": "FB",
+  "language": "SCL",
+  "number": null,
+  "sourceCode": "FUNCTION_BLOCK \"MyFB\"\nVAR\n  counter : INT;\nEND_VAR\n\n// Logic here\n\nEND_FUNCTION_BLOCK\n"
+}
+
+### Push SCL source to existing block
+PUT {{base}}/api/devices/{{device}}/blocks/{{block}}/scl
+Content-Type: application/json
+
+{
+  "source": "FUNCTION_BLOCK \"MyFB\"\nVAR\n  counter : INT;\nEND_VAR\n\ncounter := counter + 1;\n\nEND_FUNCTION_BLOCK\n"
+}
+
+### Compile a block
+POST {{base}}/api/devices/{{device}}/blocks/{{block}}/compile
+
+### Save project
+POST {{base}}/api/project/save

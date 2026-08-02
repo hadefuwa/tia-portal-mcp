@@ -348,6 +348,94 @@ public sealed class TiaPortalService : IDisposable
         catch { }
     }
 
+    // ── Project signature ─────────────────────────────────────────────────────
+
+    public async Task<Models.ProjectSignature> GetProjectSignatureAsync()
+    {
+        EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var proj    = _project!;
+            var devices = new List<Models.DeviceSignature>();
+
+            foreach (Device device in proj.Devices)
+            {
+                PlcSoftware? plc = null;
+                try
+                {
+                    foreach (DeviceItem di in device.DeviceItems)
+                    {
+                        plc = di.GetService<SoftwareContainer>()?.Software as PlcSoftware;
+                        if (plc is not null) break;
+                    }
+                }
+                catch { }
+                if (plc is null) continue;
+
+                var blocks = new List<Models.BlockSignature>();
+                CollectBlockSigs(plc.BlockGroup, blocks);
+
+                var tables = plc.TagTableGroup.TagTables
+                    .Cast<PlcTagTable>()
+                    .Select(t => new Models.TagTableSig { Name = t.Name, TagCount = t.Tags.Count })
+                    .ToList();
+
+                devices.Add(new Models.DeviceSignature
+                {
+                    Name      = device.Name,
+                    Blocks    = blocks,
+                    TagTables = tables,
+                });
+            }
+
+            return new Models.ProjectSignature
+            {
+                CapturedAt   = DateTime.UtcNow.ToString("O"),
+                ProjectName  = proj.Name,
+                ProjectPath  = proj.Path.FullName,
+                Devices      = devices,
+            };
+        });
+    }
+
+    private static void CollectBlockSigs(PlcBlockGroup group, List<Models.BlockSignature> list)
+    {
+        foreach (PlcBlock b in group.Blocks.Cast<PlcBlock>())
+        {
+            bool consistent = false;
+            try { consistent = b.IsConsistent; } catch { }
+            list.Add(new Models.BlockSignature
+            {
+                Name         = b.Name,
+                Type         = b.GetType().Name.Replace("PlcBlock", ""),
+                Number       = b.Number,
+                Language     = b.ProgrammingLanguage.ToString(),
+                IsConsistent = consistent,
+            });
+        }
+        foreach (PlcBlockUserGroup sub in group.Groups)
+            CollectBlockSigs(sub, list);
+    }
+
+    private static void CollectBlockSigs(PlcBlockUserGroup group, List<Models.BlockSignature> list)
+    {
+        foreach (PlcBlock b in group.Blocks.Cast<PlcBlock>())
+        {
+            bool consistent = false;
+            try { consistent = b.IsConsistent; } catch { }
+            list.Add(new Models.BlockSignature
+            {
+                Name         = b.Name,
+                Type         = b.GetType().Name.Replace("PlcBlock", ""),
+                Number       = b.Number,
+                Language     = b.ProgrammingLanguage.ToString(),
+                IsConsistent = consistent,
+            });
+        }
+        foreach (PlcBlockUserGroup sub in group.Groups)
+            CollectBlockSigs(sub, list);
+    }
+
     // ── Option packages ───────────────────────────────────────────────────────
 
     public async Task<IReadOnlyList<Models.OptionPackageInfo>> GetOptionPackagesAsync()

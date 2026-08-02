@@ -145,6 +145,54 @@ public sealed class TagService
         });
     }
 
+    public async Task ImportTagTableFromContentAsync(string deviceName, string xmlContent)
+    {
+        _tia.EnsureConnected();
+        await _sta.RunAsync(() =>
+        {
+            Directory.CreateDirectory(_opts.ExportDirectory);
+            var path = Path.Combine(_opts.ExportDirectory, $"{deviceName}_tags_import.xml");
+            File.WriteAllText(path, xmlContent, System.Text.Encoding.UTF8);
+            var plc = _sw.GetPlcSoftware(deviceName);
+            plc.TagTableGroup.TagTables.Import(new FileInfo(path), ImportOptions.Override);
+            _log.LogInformation("Imported tag table from XML content on {Device}.", deviceName);
+        });
+    }
+
+    public async Task<int> BatchRenameTagsAsync(
+        string deviceName, string tableName, IReadOnlyList<Models.TagRenameItem> renames)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var plc   = _sw.GetPlcSoftware(deviceName);
+            var table = FindTagTable(plc.TagTableGroup, tableName);
+
+            var renameMap = renames.ToDictionary(
+                r => r.From, r => r.To, StringComparer.OrdinalIgnoreCase);
+
+            var tagData = table.Tags.Cast<PlcTag>().Select(t => (
+                Name:       renameMap.TryGetValue(t.Name, out var n) ? n : t.Name,
+                DataType:   t.DataTypeName,
+                Address:    t.LogicalAddress,
+                Accessible: t.ExternalAccessible,
+                Writable:   t.ExternalWritable,
+                Comment:    ReadComment(t)
+            )).ToList();
+
+            var xml  = XmlHelper.CreateTagTableXml(tableName, tagData);
+            var path = Path.Combine(_opts.ExportDirectory, $"{deviceName}_{tableName}_rename.xml");
+            Directory.CreateDirectory(_opts.ExportDirectory);
+            File.WriteAllText(path, xml, System.Text.Encoding.UTF8);
+            plc.TagTableGroup.TagTables.Import(new FileInfo(path), ImportOptions.Override);
+
+            var renamed = tagData.Count(t => renameMap.ContainsKey(t.Name) || renames.Any(r => r.To == t.Name));
+            _log.LogInformation("Batch-renamed {Count} tag(s) in '{Table}' on {Device}.",
+                renames.Count, tableName, deviceName);
+            return renames.Count;
+        });
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static PlcTagTable FindTagTable(PlcTagTableGroup group, string name)
