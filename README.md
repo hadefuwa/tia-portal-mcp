@@ -97,7 +97,7 @@ TIA Portal requires your Windows account to be in a specific security group befo
 3. A native desktop window opens with the dashboard inside it
 4. Click **Connect to TIA Portal** — the dashboard reads your open project
 
-The first time TIA Portal Openness is used it will show an access approval dialog — click **Yes to all** to approve. This is a one-time step.
+TIA Portal will show an access approval dialog — click **Yes to all** to approve. This dialog appears **every time a new instance of the exe connects**, not just the first time. Each app restart will require one approval click.
 
 > The window minimises to the **system tray** rather than closing. Right-click the tray icon to exit completely.
 
@@ -119,6 +119,39 @@ Once connected, your PLC devices appear in the left sidebar. Click a device to e
 4. In a new conversation, ask Claude to do something: *"List the blocks on PLC_1"*, *"Create an FB called SpeedControl with a ramp function"*, *"Rename all tags in the IO_Mapping table — prefix with HMI_"*.
 
 Claude calls the tools automatically and shows you every step.
+
+---
+
+## Connecting Claude Code (stdio MCP)
+
+Claude Code, Cursor, and VS Code Copilot use **stdio transport** — they spawn the exe directly and communicate over stdin/stdout. No dashboard window is needed.
+
+### Step 1 — Build the exe
+
+```bash
+dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release
+```
+
+### Step 2 — Add to `~/.claude/.mcp.json`
+
+Create (or edit) `C:\Users\<you>\.claude\.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "tia-portal": {
+      "command": "C:\\path\\to\\tia-portal-mcp\\src\\TiaOpennessMcpServer\\bin\\Release\\net48\\TiaPortalDashboard.exe",
+      "args": ["--mcp-stdio"]
+    }
+  }
+}
+```
+
+> Use `~/.claude/.mcp.json`, **not** `~/.claude/settings.json`. The settings file has no `mcpServers` field and will silently ignore it.
+
+### Step 3 — Start TIA Portal and connect
+
+Before asking Claude Code to use the tools, make sure TIA Portal is open and you've run a connect call once (either via the dashboard or via the MCP `connect_to_tia_portal` tool). Claude Code will spawn a new headless instance of the exe; TIA Portal will show its approval dialog — click **Yes to all**.
 
 ---
 
@@ -156,6 +189,9 @@ Complete setup step 3. Make sure you signed out and back in after being added to
 **"No running TIA Portal process found"**
 TIA Portal must be open with a project loaded before you click Connect.
 
+**TIA Portal approval dialog keeps appearing on every restart**
+This is expected behaviour — TIA Portal Openness shows the "Allow external access" dialog on every new process connection, not just the first time. Each time you restart the dashboard or the stdio exe a new connection is made and a new approval is required. Keep an eye on the TIA Portal taskbar button; the dialog sometimes appears behind other windows.
+
 **"Inconsistent blocks and PLC data types (UDT) cannot be exported"**
 Your project has UDT changes that haven't been compiled. In TIA Portal, press **Ctrl+B** to compile everything, then retry.
 
@@ -181,6 +217,12 @@ This is usually a protocol version mismatch. The server implements MCP `2025-03-
 
 **"type": "http" in claude_desktop_config.json doesn't work**
 Claude Desktop's config file (`%APPDATA%\Claude\claude_desktop_config.json`) only supports `stdio` entries — local executables started by Claude Desktop. HTTP MCP servers are not supported via this file. Use the Connectors UI instead (Settings → Connectors).
+
+**"Missing 'Namespace' identifier attribute" when creating a GlobalDB**
+This error appears when the SimaticML XML has `Namespace` as an XML attribute on the element (`<SW.Blocks.GlobalDB Namespace="">`) instead of as a child element inside `<AttributeList>`. The correct form is `<Namespace />` inside `<AttributeList>`. This is handled correctly by the built-in `create_block` tool; you would only see this if crafting XML manually.
+
+**"Cannot import multilingual text with culture 'en-US'" when creating a block**
+The `<MultilingualText>` comment blocks in SimaticML XML include a `<Culture>` tag that must match the project's language. A project created in British English (`en-GB`) will reject `en-US`. The built-in block templates omit the comment section entirely to avoid this — if you are writing custom XML, use `<ObjectList />` for the ObjectList instead of including a MultilingualText entry.
 
 **My code changes aren't reflected after restarting the app**
 The desktop shortcut (`Start TIA Dashboard.bat`) automatically checks whether any source file (`.cs`, `.csproj`, `dashboard.html`) is newer than the compiled exe and rebuilds before launching. If the build fails, the bat window will pause and show the error — fix it and run the shortcut again. To build manually:
