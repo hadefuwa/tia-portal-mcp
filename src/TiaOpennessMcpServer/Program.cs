@@ -44,13 +44,15 @@ services.AddSingleton<HardwareService>();
 services.AddSingleton<SoftwareService>();
 services.AddSingleton<SclAnalyzerService>();
 services.AddSingleton<TagService>();
+services.AddSingleton<HmiTagService>();
 
-var sp     = services.BuildServiceProvider();
-var tia    = sp.GetRequiredService<TiaPortalService>();
-var hw     = sp.GetRequiredService<HardwareService>();
-var sw     = sp.GetRequiredService<SoftwareService>();
-var scl    = sp.GetRequiredService<SclAnalyzerService>();
-var tagSvc = sp.GetRequiredService<TagService>();
+var sp      = services.BuildServiceProvider();
+var tia     = sp.GetRequiredService<TiaPortalService>();
+var hw      = sp.GetRequiredService<HardwareService>();
+var sw      = sp.GetRequiredService<SoftwareService>();
+var scl     = sp.GetRequiredService<SclAnalyzerService>();
+var tagSvc  = sp.GetRequiredService<TagService>();
+var hmiSvc  = sp.GetRequiredService<HmiTagService>();
 
 var mcpLog  = new List<McpLogEntry>();
 var mcpLock = new object();
@@ -213,6 +215,26 @@ async Task HandleAsync(HttpListenerContext ctx)
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
+        // ── Block attribute diagnostics ───────────────────────────────────────
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/blocks/{block}/attributes", out m))
+        {
+            try   { await Json(res, await sw.GetBlockAttributeInfosAsync(m["device"], m["block"])); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── Block texts (direct property patch — works on OBs) ────────────────
+        else if (method == "PATCH" && TryMatch(path, "/api/devices/{device}/blocks/{block}/texts", out m))
+        {
+            try
+            {
+                var body = await ReadJson<BlockTextsRequest>(req);
+                if (body is null) { await Json(res, new { error = "body required" }, 400); return; }
+                await sw.PatchBlockTextsAsync(m["device"], m["block"], body);
+                await Json(res, new { success = true });
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
         // ── Block analyze ─────────────────────────────────────────────────────
         else if (method == "POST" && TryMatch(path, "/api/devices/{device}/blocks/{block}/analyze", out m))
         {
@@ -264,6 +286,27 @@ async Task HandleAsync(HttpListenerContext ctx)
                 await tagSvc.ImportTagTableFromContentAsync(m["device"], body.Content);
                 await Json(res, new { success = true });
             }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── HMI tag tables (WinCC Unified) ───────────────────────────────────
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/hmi/tags", out m))
+        {
+            try   { await Json(res, await hmiSvc.ListTagTablesAsync(m["device"])); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── HMI all tags (flat) ───────────────────────────────────────────────
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/hmi/tags/all", out m))
+        {
+            try   { await Json(res, await hmiSvc.GetAllTagsAsync(m["device"])); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── HMI tags in table ─────────────────────────────────────────────────
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/hmi/tags/{table}", out m))
+        {
+            try   { await Json(res, await hmiSvc.GetTagsAsync(m["device"], m["table"])); }
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 

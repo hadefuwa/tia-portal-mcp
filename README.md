@@ -32,9 +32,13 @@ Both modes talk to the same REST server and the same TIA Portal connection.
 | **Analyse SCL** | Scan SCL code for issues (unbalanced blocks, nested IFs, etc.) |
 | **Create blocks** | Generate new FB, FC, OB, or GlobalDB from SCL source |
 | **Create instance DBs** | Create a new Instance DB linked to any FB |
+| **Patch block texts** | Update a block's title, comment, and per-network titles without touching logic |
+| **Block attribute inspector** | List all readable/writable attributes and compositions on any block |
 | **Browse tag tables** | See every tag, its data type, address, and comment |
 | **Import tag tables** | Import a complete tag table from SimaticML XML |
 | **Batch rename tags** | Rename many tags at once in a single atomic operation |
+| **HMI tag tables** | List WinCC Unified tag tables and tag counts for any HMI device |
+| **HMI tag export** | Export all HMI tags with PLC connections, data types, and table assignments |
 | **Project signature** | Full index of every block and tag table across all devices |
 | **Clone project** | Duplicate the open project to a new folder with all hardware, blocks, and tags |
 | **Used products** | List the products/option packs the project references (e.g. StartDrive, Safety) |
@@ -257,15 +261,56 @@ src/TiaOpennessMcpServer/
 ├── dashboard.html              # Single-page frontend
 ├── Services/
 │   ├── TiaPortalService.cs     # Connect/disconnect, project clone, used products
-│   ├── SoftwareService.cs      # Blocks — list, read, write SCL, write XML, compile
+│   ├── SoftwareService.cs      # Blocks — list, read, write SCL, write XML, compile, patch texts
 │   ├── HardwareService.cs      # Device enumeration
-│   ├── TagService.cs           # Tag tables
+│   ├── TagService.cs           # PLC tag tables
+│   ├── HmiTagService.cs        # WinCC Unified HMI tag tables and tags
 │   └── SclAnalyzerService.cs   # SCL static analysis
 ├── Models/                     # Data transfer objects
 └── Utilities/
     ├── StaTaskScheduler.cs     # STA thread wrapper for COM calls
     ├── XmlHelper.cs            # Block XML parse/patch helpers
     └── NetFxPolyfills.cs       # C# 9/11 types missing from net48
+```
+
+### REST API — HMI tag endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/devices/{device}/hmi/tags` | List all WinCC Unified tag tables with tag counts |
+| `GET` | `/api/devices/{device}/hmi/tags/all` | Export all HMI tags flat (name, table, dataType, plcTag) |
+| `GET` | `/api/devices/{device}/hmi/tags/{table}` | Get tags from a specific table |
+
+`{device}` is the HMI device name as it appears in TIA Portal (typically `HMI`).
+
+```bash
+# List tag tables
+curl http://localhost:5000/api/devices/HMI/hmi/tags
+
+# Export every tag with its PLC connection
+curl http://localhost:5000/api/devices/HMI/hmi/tags/all
+
+# Tags in a specific table
+curl http://localhost:5000/api/devices/HMI/hmi/tags/Default%20tag%20table
+```
+
+### REST API — Block text patching
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `PATCH` | `/api/devices/{device}/blocks/{block}/texts` | Update block/network titles and comments |
+| `GET` | `/api/devices/{device}/blocks/{block}/attributes` | List all attributes and compositions on a block |
+
+```json
+// PATCH body — all fields optional
+{
+  "blockTitle": "My FB",
+  "blockComment": "Main conveyor control",
+  "networks": [
+    { "title": "Enable check", "comment": "Gate on safety OK" },
+    { "title": null, "comment": "Speed ramp" }
+  ]
+}
 ```
 
 ---

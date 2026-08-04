@@ -22,6 +22,19 @@ public sealed record BlockContent : BlockInfo
     public required string XmlContent { get; init; }
 }
 
+public sealed record NetworkTexts
+{
+    public string? Title   { get; init; }
+    public string? Comment { get; init; }
+}
+
+public sealed record BlockTextsRequest
+{
+    public string?         BlockTitle   { get; init; }
+    public string?         BlockComment { get; init; }
+    public NetworkTexts[]? Networks     { get; init; }
+}
+
 public sealed record BlockCreateRequest
 {
     public required string             Name     { get; init; }

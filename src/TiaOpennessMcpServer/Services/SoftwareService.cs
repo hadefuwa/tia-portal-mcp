@@ -237,6 +237,46 @@ public sealed class SoftwareService
         });
     }
 
+    public async Task PatchBlockTextsAsync(string deviceName, string blockName, Models.BlockTextsRequest req)
+    {
+        _tia.EnsureConnected();
+        await _sta.RunAsync(() =>
+        {
+            var plc   = GetPlcSoftware(deviceName);
+            var block = FindBlock(plc.BlockGroup, blockName);
+
+            if (!string.IsNullOrEmpty(req.BlockTitle))
+                block.SetAttribute("Title", req.BlockTitle);
+            if (!string.IsNullOrEmpty(req.BlockComment))
+                block.SetAttribute("Comment", req.BlockComment);
+
+            _log.LogInformation("Patched texts on block {Block}.", blockName);
+        });
+    }
+
+    public async Task<object> GetBlockAttributeInfosAsync(string deviceName, string blockName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var plc   = GetPlcSoftware(deviceName);
+            var block = FindBlock(plc.BlockGroup, blockName);
+
+            var attrs = block.GetAttributeInfos()
+                .Cast<Siemens.Engineering.EngineeringAttributeInfo>()
+                .Select(i => new { name = i.Name, access = i.AccessMode.ToString() })
+                .ToList();
+
+            var iEng = (Siemens.Engineering.IEngineeringObject)block;
+            var compositions = iEng.GetCompositionInfos()
+                .Cast<Siemens.Engineering.EngineeringCompositionInfo>()
+                .Select(i => i.Name)
+                .ToList();
+
+            return (object)new { blockType = block.GetType().Name, attributes = attrs, compositions };
+        });
+    }
+
     public async Task WriteBlockXmlAsync(string deviceName, string blockName, string xmlContent)
     {
         _tia.EnsureConnected();
@@ -250,7 +290,26 @@ public sealed class SoftwareService
             var importFile = Path.Combine(_opts.ExportDirectory,
                 $"{deviceName}_{blockName}_xml_edit.xml");
             File.WriteAllText(importFile, xmlContent);
-            plc.BlockGroup.Blocks.Import(new FileInfo(importFile), ImportOptions.Override);
+
+            // Import to the block's own parent group so Override resolves correctly
+            // for blocks in user-defined subfolders.
+            PlcBlockComposition targetBlocks;
+            try
+            {
+                var existing = FindBlock(plc.BlockGroup, blockName);
+                targetBlocks = existing.Parent switch
+                {
+                    PlcBlockUserGroup ug => ug.Blocks,
+                    PlcBlockGroup     rg => rg.Blocks,
+                    _                   => plc.BlockGroup.Blocks,
+                };
+            }
+            catch
+            {
+                targetBlocks = plc.BlockGroup.Blocks;
+            }
+
+            targetBlocks.Import(new FileInfo(importFile), ImportOptions.Override);
             _log.LogInformation("Imported raw XML for {Block} on {Device}.", blockName, deviceName);
         });
     }
