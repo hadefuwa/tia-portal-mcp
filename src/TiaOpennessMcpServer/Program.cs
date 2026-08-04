@@ -45,6 +45,7 @@ services.AddSingleton<SoftwareService>();
 services.AddSingleton<SclAnalyzerService>();
 services.AddSingleton<TagService>();
 services.AddSingleton<HmiTagService>();
+services.AddSingleton<HmiScreenService>();
 
 var sp      = services.BuildServiceProvider();
 var tia     = sp.GetRequiredService<TiaPortalService>();
@@ -52,7 +53,8 @@ var hw      = sp.GetRequiredService<HardwareService>();
 var sw      = sp.GetRequiredService<SoftwareService>();
 var scl     = sp.GetRequiredService<SclAnalyzerService>();
 var tagSvc  = sp.GetRequiredService<TagService>();
-var hmiSvc  = sp.GetRequiredService<HmiTagService>();
+var hmiSvc      = sp.GetRequiredService<HmiTagService>();
+var hmiScreenSvc = sp.GetRequiredService<HmiScreenService>();
 
 var mcpLog  = new List<McpLogEntry>();
 var mcpLock = new object();
@@ -319,6 +321,20 @@ async Task HandleAsync(HttpListenerContext ctx)
                 if (body is null || body.Count == 0) { await Json(res, new { error = "body required: array of {name, dataType, plcTag}" }, 400); return; }
                 await Json(res, await hmiSvc.CreateTagsAsync(m["device"], m["table"], body));
             }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── HMI screens — list ────────────────────────────────────────────────
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/hmi/screens", out m))
+        {
+            try   { await Json(res, await hmiScreenSvc.ListScreensAsync(m["device"])); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── HMI screens — tag dynamizations in a screen (read only) ─────────
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/hmi/screens/{screen}/tags", out m))
+        {
+            try   { await Json(res, await hmiScreenSvc.GetScreenTagRefsAsync(m["device"], m["screen"])); }
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
