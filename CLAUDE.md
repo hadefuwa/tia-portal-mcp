@@ -170,3 +170,80 @@ For stdio mode (no dashboard required):
 ## Export directory
 
 Generated and temp XML files go to `C:\Temp\TiaExports` (configurable in `appsettings.json` under `TiaOpenness.ExportDirectory`). Useful for debugging — the XML written before each import call is left on disk.
+
+---
+
+## WinCC Unified HMI tag API — confirmed behaviours
+
+Tested against TIA Portal V20 with WinCC Unified. Use `HmiTagService` for all HMI tag operations.
+
+### Reading tags — works fully
+
+```csharp
+// Get HmiSoftware
+var sw = deviceItem.GetService<SoftwareContainer>()?.Software as HmiSoftware;
+
+// Iterate tables
+foreach (HmiTagTable table in sw.TagTables)
+    foreach (HmiTag tag in table.Tags.Cast<HmiTag>())
+        tag.GetAttribute("PlcTag");   // returns plcTag string
+        tag.GetAttribute("DataType"); // returns type string
+        tag.GetAttribute("Comment");  // returns comment string
+```
+
+**"ConnectionName" attribute does NOT exist on HmiTag in WinCC Unified.** Reading it via `GetAttribute("ConnectionName")` throws — use a try/catch and return "".
+
+### Finding tag tables — use Find(), not indexer
+
+```csharp
+// WRONG — indexer takes int, not string:
+var table = sw.TagTables["Default tag table"];  // CS1503
+
+// CORRECT — Find() returns null if not found:
+var table = sw.TagTables.Find("Default tag table");
+```
+
+### Creating tags — partial support only
+
+```csharp
+// Create() with ONE parameter — works:
+var tag = table.Tags.Create(tagName);
+
+// Create() with TWO parameters — throws "Tag table not found":
+var tag = table.Tags.Create(tagName, dataType);  // DO NOT USE
+
+// SetAttribute("DataType", ...) — works after Create():
+tag.SetAttribute("DataType", "Bool");
+
+// SetAttribute("PlcTag", ...) — throws for newly created tags via API:
+tag.SetAttribute("PlcTag", "DI_A_0");  // "controller tag not found"
+// The tag IS created successfully as an Internal tag (Connection = "<Internal tag>").
+// The PlcTag link must be set manually in TIA Portal UI after the tag exists.
+// Workaround: omit PlcTag from Create calls; user links tags to PLC in TIA Portal UI.
+```
+
+### WinCC Unified forcing faceplate — struct tag requirement
+
+The forcing screen uses a faceplate template with a `Display_Tag` interface parameter. The template internally accesses `Display_Tag.State`, `.ForcedState`, `.ForcedStatus`. This means:
+
+- The `Display_Tag` must be a **struct-type** HMI tag with those sub-members
+- Individual Bool tags (`DI_A_0`, `DQ_A_0`) cannot replace struct references in the faceplate
+- If the `IO → IO.IO` struct HMI tag is deleted, the entire forcing screen breaks
+- **Fastest fix**: recreate the `IO` HMI tag (type: 1214C CPU, PlcTag: IO.IO) in TIA Portal UI
+
+### PowerShell API calls — use System.Net.WebRequest for POST with body
+
+`Invoke-WebRequest` has issues with body serialization on Windows PowerShell 5.1. Always use raw `WebRequest`:
+
+```powershell
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($jsonBody)
+$wr = [System.Net.WebRequest]::Create($uri)
+$wr.Method = "POST"; $wr.ContentType = "application/json"; $wr.ContentLength = $bytes.Length
+$s = $wr.GetRequestStream(); $s.Write($bytes, 0, $bytes.Length); $s.Close()
+try {
+    $r = $wr.GetResponse()
+    (New-Object System.IO.StreamReader($r.GetResponseStream())).ReadToEnd()
+} catch [System.Net.WebException] {
+    (New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd()
+}
+```
