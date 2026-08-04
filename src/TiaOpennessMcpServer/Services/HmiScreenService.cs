@@ -4,8 +4,11 @@ using Siemens.Engineering.HW;
 using Siemens.Engineering.HW.Features;
 using Siemens.Engineering.HmiUnified;
 using Siemens.Engineering.HmiUnified.UI.Base;
+using Siemens.Engineering.HmiUnified.UI.Controls;
 using Siemens.Engineering.HmiUnified.UI.Dynamization;
+using Siemens.Engineering.HmiUnified.UI.Parts;
 using Siemens.Engineering.HmiUnified.UI.Screens;
+using TiaOpennessMcpServer.Models;
 using TiaOpennessMcpServer.Utilities;
 
 namespace TiaOpennessMcpServer.Services;
@@ -57,22 +60,88 @@ public sealed class HmiScreenService
         });
     }
 
+    // ── Update faceplate interface parameter values ───────────────────────────
+    // tagUpdates: list of { containerName, parameterName, newValue }
+
+    public async Task<object> UpdateFaceplateTagsAsync(string deviceName, string screenName,
+        List<FaceplateTagUpdate> updates)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var hmi    = GetHmiSoftware(deviceName);
+            var screen = hmi.Screens.Find(screenName)
+                ?? throw new KeyNotFoundException($"HMI screen '{screenName}' not found.");
+
+            var results = new List<object>();
+            foreach (HmiScreenItemBase item in screen.ScreenItems)
+            {
+                if (item is not HmiFaceplateContainer fp) continue;
+
+                foreach (var upd in updates)
+                {
+                    if (!fp.Name.Equals(upd.ContainerName, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    foreach (HmiFaceplateInterface iface in fp.Interface)
+                    {
+                        if (!iface.PropertyName.Equals(upd.ParameterName, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        var oldValue = iface.Value?.ToString() ?? "";
+                        iface.Value = upd.NewValue;
+                        results.Add(new
+                        {
+                            screen        = screenName,
+                            container     = fp.Name,
+                            parameter     = iface.PropertyName,
+                            oldValue,
+                            newValue      = upd.NewValue,
+                            status        = "updated",
+                        });
+                    }
+                }
+            }
+            _log.LogInformation("Updated {Count} faceplate parameters on screen '{Screen}'.",
+                results.Count, screenName);
+            return (object)results;
+        });
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static void CollectTagRefs(HmiScreen screen, List<object> refs)
     {
         foreach (HmiScreenItemBase item in screen.ScreenItems)
         {
+            // Regular tag dynamizations on any screen item
             foreach (DynamizationBase dyn in item.Dynamizations)
             {
                 if (dyn is TagDynamization td)
                 {
                     refs.Add(new
                     {
+                        kind         = "TagDynamization",
                         screenItem   = item.Name,
                         propertyName = td.PropertyName,
                         tag          = td.Tag,
                         readOnly     = td.ReadOnly,
+                    });
+                }
+            }
+
+            // Faceplate containers — check their interface parameter bindings
+            if (item is HmiFaceplateContainer fp)
+            {
+                foreach (HmiFaceplateInterface iface in fp.Interface)
+                {
+                    refs.Add(new
+                    {
+                        kind         = "FaceplateInterface",
+                        screenItem   = fp.Name,
+                        propertyName = iface.PropertyName,
+                        tag          = iface.Value?.ToString() ?? "",
+                        readOnly     = false,
                     });
                 }
             }

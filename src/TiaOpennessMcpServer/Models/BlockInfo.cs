@@ -43,6 +43,13 @@ public sealed record HmiTagCreateRequest
     public          string Connection { get; init; } = "HMI_Connection_6";
 }
 
+public sealed record FaceplateTagUpdate
+{
+    public required string ContainerName  { get; init; }
+    public required string ParameterName  { get; init; }
+    public required string NewValue       { get; init; }
+}
+
 public sealed record BlockCreateRequest
 {
     public required string             Name     { get; init; }

@@ -331,6 +331,18 @@ async Task HandleAsync(HttpListenerContext ctx)
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
+        // ── HMI screens — update faceplate interface parameters ───────────────
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/hmi/screens/{screen}/update-faceplate-tags", out m))
+        {
+            try
+            {
+                var body = await ReadJson<List<FaceplateTagUpdate>>(req);
+                if (body is null || body.Count == 0) { await Json(res, new { error = "body required: array of {containerName, parameterName, newValue}" }, 400); return; }
+                await Json(res, await hmiScreenSvc.UpdateFaceplateTagsAsync(m["device"], m["screen"], body));
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
         // ── HMI screens — tag dynamizations in a screen (read only) ─────────
         else if (method == "GET" && TryMatch(path, "/api/devices/{device}/hmi/screens/{screen}/tags", out m))
         {
