@@ -4,6 +4,7 @@ using Siemens.Engineering.HW;
 using Siemens.Engineering.HW.Features;
 using Siemens.Engineering.HmiUnified;
 using Siemens.Engineering.HmiUnified.HmiTags;
+using TiaOpennessMcpServer.Models;
 using TiaOpennessMcpServer.Utilities;
 
 namespace TiaOpennessMcpServer.Services;
@@ -49,6 +50,53 @@ public sealed class HmiTagService
             var tags = table.Tags.Cast<HmiTag>().Select(t => ReadTag(t)).ToList();
             _log.LogDebug("Read {Count} tags from HMI table '{Table}'.", tags.Count, tableName);
             return (object)tags;
+        });
+    }
+
+    // ── Create tags in a table ────────────────────────────────────────────────
+
+    public async Task<object> CreateTagsAsync(string deviceName, string tableName, List<HmiTagCreateRequest> tags)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var hmi = GetHmiSoftware(deviceName);
+
+            // Find() returns null if not found; avoids int-only indexer
+            var table = hmi.TagTables.Find(tableName)
+                ?? throw new KeyNotFoundException($"HMI tag table '{tableName}' not found.");
+
+            var results = new List<object>();
+            foreach (var req in tags)
+            {
+                // Update existing tag if plcTag is empty, otherwise skip
+                var existing = table.Tags.Cast<HmiTag>()
+                    .FirstOrDefault(t => t.Name.Equals(req.Name, StringComparison.OrdinalIgnoreCase));
+                if (existing is not null)
+                {
+                    var existingPlc = SafeAttr(existing, "PlcTag");
+                    if (!string.IsNullOrEmpty(existingPlc))
+                    {
+                        results.Add(new { name = req.Name, status = "skipped", reason = "already exists" });
+                        continue;
+                    }
+                    // Tag exists but has no PLC link — patch it
+                    if (!string.IsNullOrEmpty(req.PlcTag))
+                        existing.SetAttribute("PlcTag", req.PlcTag);
+                    results.Add(new { name = req.Name, status = "updated", plcTag = req.PlcTag });
+                    continue;
+                }
+
+                var tag = table.Tags.Create(req.Name);
+                tag.SetAttribute("DataType", req.DataType);
+                if (!string.IsNullOrEmpty(req.PlcTag))
+                    tag.SetAttribute("PlcTag", req.PlcTag);
+
+                _log.LogInformation("Created HMI tag '{Name}' → '{PlcTag}' in table '{Table}'.",
+                    req.Name, req.PlcTag, tableName);
+                results.Add(new { name = req.Name, status = "created", plcTag = req.PlcTag });
+            }
+            return (object)results;
         });
     }
 

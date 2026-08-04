@@ -35,6 +35,14 @@ public sealed record BlockTextsRequest
     public NetworkTexts[]? Networks     { get; init; }
 }
 
+public sealed record HmiTagCreateRequest
+{
+    public required string Name     { get; init; }
+    public required string DataType { get; init; }
+    public          string PlcTag   { get; init; } = "";
+    public          string Connection { get; init; } = "HMI_Connection_6";
+}
+
 public sealed record BlockCreateRequest
 {
     public required string             Name     { get; init; }

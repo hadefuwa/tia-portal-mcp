@@ -310,6 +310,18 @@ async Task HandleAsync(HttpListenerContext ctx)
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
+        // ── HMI create tags in table ──────────────────────────────────────────
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/hmi/tags/{table}/create", out m))
+        {
+            try
+            {
+                var body = await ReadJson<List<HmiTagCreateRequest>>(req);
+                if (body is null || body.Count == 0) { await Json(res, new { error = "body required: array of {name, dataType, plcTag}" }, 400); return; }
+                await Json(res, await hmiSvc.CreateTagsAsync(m["device"], m["table"], body));
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
         // ── Batch rename tags ─────────────────────────────────────────────────
         else if (method == "POST" && TryMatch(path, "/api/devices/{device}/tags/{table}/rename", out m))
         {
