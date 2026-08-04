@@ -280,6 +280,7 @@ src/TiaOpennessMcpServer/
 | `GET` | `/api/devices/{device}/hmi/tags` | List all WinCC Unified tag tables with tag counts |
 | `GET` | `/api/devices/{device}/hmi/tags/all` | Export all HMI tags flat (name, table, dataType, plcTag) |
 | `GET` | `/api/devices/{device}/hmi/tags/{table}` | Get tags from a specific table |
+| `POST` | `/api/devices/{device}/hmi/tags/{table}/create` | Create Bool/Int/etc tags in a table (see note) |
 
 `{device}` is the HMI device name as it appears in TIA Portal (typically `HMI`).
 
@@ -292,7 +293,14 @@ curl http://localhost:5000/api/devices/HMI/hmi/tags/all
 
 # Tags in a specific table
 curl http://localhost:5000/api/devices/HMI/hmi/tags/Default%20tag%20table
+
+# Create tags (body is a JSON array)
+curl -X POST http://localhost:5000/api/devices/HMI/hmi/tags/Default%20tag%20table/create \
+  -H "Content-Type: application/json" \
+  -d '[{"name":"DI_A_0","dataType":"Bool"},{"name":"DQ_A_0","dataType":"Bool"}]'
 ```
+
+> **WinCC Unified limitation:** The create endpoint creates tags as *Internal tags* (no PLC connection). The `SetAttribute("PlcTag", ...)` call in the Openness API throws for newly created tags regardless of format. After creating tags via the API, open TIA Portal → HMI tags and manually set the Connection and PLC tag for each one.
 
 ### REST API — Block text patching
 
