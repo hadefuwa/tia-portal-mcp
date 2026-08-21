@@ -32,7 +32,53 @@ AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
     return null;
 };
 
+// ── Command line ──────────────────────────────────────────────────────────────
 bool stdioMode = Array.IndexOf(args, "--mcp-stdio") >= 0;
+
+string? ArgValue(string flag)
+{
+    var i = Array.IndexOf(args, flag);
+    return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+}
+
+// --project <path> opens a project at startup, so a session does not have to
+// spend its first tool call connecting. Headless unless --with-ui is passed.
+string? startupProject = ArgValue("--project");
+bool    startupWithUi  = Array.IndexOf(args, "--with-ui") >= 0;
+
+// --profile lite|standard|full trims the advertised tool surface. 38 tool
+// definitions is a lot of context to spend before the model has done anything;
+// a session that only reads and edits SCL needs ten of them.
+string mcpProfile = (ArgValue("--profile")
+                     ?? Environment.GetEnvironmentVariable("TIA_MCP_PROFILE")
+                     ?? "full").Trim().ToLowerInvariant();
+
+var liteTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "connect_to_tia_portal", "get_status", "save_project", "list_devices",
+    "list_blocks", "read_block", "write_block_scl", "compile_block",
+    "list_tag_tables", "get_tags",
+};
+
+// standard = lite + everything that edits code, tags and HMI content.
+// Excluded from standard, present in full: clone_project, get_option_packages,
+// open_project, close_project, generate_s7_1200 — project-lifecycle and
+// hardware-generation tools that most sessions never touch.
+var standardTools = new HashSet<string>(liteTools, StringComparer.OrdinalIgnoreCase)
+{
+    "analyze_block", "analyze_scl", "create_block", "create_instance_db",
+    "import_block_xml", "import_tag_table", "batch_rename_tags",
+    "get_project_signature", "get_block_attributes", "patch_block_texts",
+    "create_tag_table", "create_tag", "export_block", "export_tag_table",
+    "get_device", "get_io_mapping",
+    "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags", "create_hmi_tags",
+    "list_hmi_screens", "get_screen_tag_refs", "update_faceplate_tags",
+};
+
+bool InProfile(string tool) =>
+    mcpProfile == "lite"     ? liteTools.Contains(tool)
+  : mcpProfile == "standard" ? standardTools.Contains(tool)
+  : true;
 
 // ── DI setup ──────────────────────────────────────────────────────────────────
 var services = new ServiceCollection();
@@ -67,13 +113,34 @@ var jsonOpts = new JsonSerializerOptions
 };
 jsonOpts.Converters.Add(new JsonStringEnumConverter());
 
+// ── Startup project (--project) ───────────────────────────────────────────────
+// Never fatal: if the project cannot be opened the server still starts, so the
+// session can connect_to_tia_portal or open_project by hand and see the reason.
+// Diagnostics go to stderr — stdout carries JSON-RPC frames and nothing else.
+async Task OpenStartupProjectAsync()
+{
+    if (string.IsNullOrWhiteSpace(startupProject)) return;
+    try
+    {
+        var info = await tia.OpenProjectAsync(startupProject!, headless: !startupWithUi);
+        Console.Error.WriteLine($"[tia-mcp] Opened project '{info.Name}' from {startupProject}");
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[tia-mcp] --project failed: {ex.Message.Split('\n')[0]}");
+    }
+}
+
 // ── Stdio MCP mode ────────────────────────────────────────────────────────────
 if (stdioMode)
 {
+    await OpenStartupProjectAsync();
     await RunStdioAsync();
     sp.Dispose();
     return;
 }
+
+await OpenStartupProjectAsync();
 
 // ── HTTP listener ─────────────────────────────────────────────────────────────
 var listener = new HttpListener();
@@ -513,8 +580,79 @@ async Task<object?> McpDispatch(JsonElement p)
 {
     string name = p.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
     JsonElement? args = p.TryGetProperty("arguments", out var a) ? a : (JsonElement?)null;
+
+    // Enforce the profile here too, not just in tools/list — a tool that was
+    // never advertised must not be callable by a model that guessed its name.
+    if (!InProfile(name))
+        throw new InvalidOperationException(
+            $"Tool '{name}' is not available in the '{mcpProfile}' profile. " +
+            "Restart the server with --profile full to enable it.");
+
+    // ── Argument accessors ────────────────────────────────────────────────────
+    // Models do not reliably honour the declared JSON type — a param described as
+    // an integer arrives as 5 about as often as "5". Every accessor below is
+    // total: it coerces what it can and falls back to the default rather than
+    // throwing, so a type mismatch can never take down the dispatch.
+
+    bool TryArg(string key, out JsonElement v)
+    {
+        v = default;
+        if (!args.HasValue || !args.Value.TryGetProperty(key, out var e)) return false;
+        if (e.ValueKind == JsonValueKind.Null) return false;
+        v = e;
+        return true;
+    }
+
     string A(string key, string def = "") =>
-        args.HasValue && args.Value.TryGetProperty(key, out var v) ? v.GetString() ?? def : def;
+        TryArg(key, out var v)
+            ? (v.ValueKind == JsonValueKind.String ? v.GetString() ?? def : v.GetRawText())
+            : def;
+
+    // Null when the argument is absent — for service params whose own default
+    // (an export path, say) is meaningfully different from an empty string.
+    string? AN(string key) =>
+        TryArg(key, out var v)
+            ? (v.ValueKind == JsonValueKind.String ? v.GetString() : v.GetRawText())
+            : null;
+
+    int? AIN(string key)
+    {
+        if (!TryArg(key, out var v)) return null;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var num)) return num;
+        if (v.ValueKind == JsonValueKind.String && int.TryParse(v.GetString(), out var str)) return str;
+        return null;
+    }
+
+    bool AB(string key, bool def = false)
+    {
+        if (!TryArg(key, out var v)) return def;
+        if (v.ValueKind == JsonValueKind.True)  return true;
+        if (v.ValueKind == JsonValueKind.False) return false;
+        if (v.ValueKind == JsonValueKind.String && bool.TryParse(v.GetString(), out var b)) return b;
+        return def;
+    }
+
+    T? AObj<T>(string key)
+    {
+        if (!TryArg(key, out var v)) return default;
+        try   { return JsonSerializer.Deserialize<T>(v.GetRawText(), jsonOpts); }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"Argument '{key}' has the wrong shape for tool '{name}': {ex.Message}");
+        }
+    }
+
+    List<T> AList<T>(string key) => AObj<List<T>>(key) ?? new List<T>();
+
+    // Guard for tools that mutate or overwrite. The model must pass confirm:true.
+    void RequireConfirm()
+    {
+        if (!AB("confirm"))
+            throw new InvalidOperationException(
+                $"'{name}' modifies the project and requires confirm:true. " +
+                "Tell the user what will change and get their agreement before retrying.");
+    }
 
     switch (name)
     {
@@ -542,7 +680,7 @@ async Task<object?> McpDispatch(JsonElement p)
                 Name       = A("name"),
                 Type       = (BlockType)Enum.Parse(typeof(BlockType), A("type", "FB"), ignoreCase: true),
                 Language   = ProgrammingLanguage.SCL,
-                Number     = int.TryParse(A("number"), out var nb) ? (int?)nb : null,
+                Number     = AIN("number"),
                 SourceCode = A("sourceCode")
             });
         case "list_tag_tables":        return await tagSvc.GetTagTablesAsync(A("device"));
@@ -553,22 +691,93 @@ async Task<object?> McpDispatch(JsonElement p)
         case "get_project_signature":  return await tia.GetProjectSignatureAsync();
         case "create_instance_db":
             return await sw.CreateInstanceDbAsync(
-                A("device"), A("name"), A("instanceOfName"),
-                int.TryParse(A("number"), out var idb) ? (int?)idb : null);
+                A("device"), A("name"), A("instanceOfName"), AIN("number"));
         case "import_tag_table":
             await tagSvc.ImportTagTableFromContentAsync(A("device"), A("content"));
             return new { success = true };
         case "batch_rename_tags":
         {
-            var rawRenames = args.HasValue && args.Value.TryGetProperty("renames", out var rv)
-                ? JsonSerializer.Deserialize<List<TagRenameItem>>(rv.GetRawText(), jsonOpts) ?? new()
-                : new List<TagRenameItem>();
-            var renamed = await tagSvc.BatchRenameTagsAsync(A("device"), A("table"), rawRenames);
+            var renamed = await tagSvc.BatchRenameTagsAsync(
+                A("device"), A("table"), AList<TagRenameItem>("renames"));
             return new { renamed };
         }
+
+        // ── HMI + block inspection ────────────────────────────────────────────
+        // Every tool in this group already round-trips over the REST routes in
+        // HandleAsync, so the service code below is exercised.
+
+        case "list_hmi_tag_tables":  return await hmiSvc.ListTagTablesAsync(A("device"));
+        case "get_hmi_tags":         return await hmiSvc.GetTagsAsync(A("device"), A("table"));
+        case "get_all_hmi_tags":     return await hmiSvc.GetAllTagsAsync(A("device"));
+        case "create_hmi_tags":
+            return await hmiSvc.CreateTagsAsync(
+                A("device"), A("table"), AList<HmiTagCreateRequest>("tags"));
+        case "list_hmi_screens":     return await hmiScreenSvc.ListScreensAsync(A("device"));
+        case "get_screen_tag_refs":  return await hmiScreenSvc.GetScreenTagRefsAsync(A("device"), A("screen"));
+        case "update_faceplate_tags":
+            return await hmiScreenSvc.UpdateFaceplateTagsAsync(
+                A("device"), A("screen"), AList<FaceplateTagUpdate>("updates"));
+        case "get_block_attributes": return await sw.GetBlockAttributeInfosAsync(A("device"), A("block"));
+        case "patch_block_texts":
+            await sw.PatchBlockTextsAsync(A("device"), A("block"),
+                AObj<BlockTextsRequest>("texts") ?? new BlockTextsRequest());
+            return new { success = true };
+
+        // ── Project lifecycle, export and hardware ────────────────────────────
+        // WARNING: the services behind this group had no caller anywhere in the
+        // codebase before these tools existed — no MCP tool and no REST route.
+        // They compile but have never run against a live project. Treat failures
+        // here as "unproven service code" first, not "bad arguments".
+
+        case "open_project":
+            return await tia.OpenProjectAsync(A("path"), AB("headless", true));
+        case "close_project":
+            RequireConfirm();
+            await tia.CloseAsync();
+            return new { success = true };
+        case "export_block":
+            return new { path = await sw.ExportBlockAsync(A("device"), A("block"), AN("path")) };
+        case "create_tag_table":
+            return await tagSvc.CreateTagTableAsync(A("device"), A("table"));
+        case "create_tag":
+            return await tagSvc.CreateTagAsync(A("device"), A("table"), new TagDefinition {
+                Name       = A("name"),
+                DataType   = A("dataType"),
+                Address    = A("address"),
+                Accessible = AB("accessible", true),
+                Writable   = AB("writable",   true),
+                Comment    = A("comment"),
+            });
+        case "export_tag_table":
+            return new { path = await tagSvc.ExportTagTableAsync(A("device"), A("table"), AN("path")) };
+        case "get_device":      return await hw.GetDeviceAsync(A("device"));
+        case "get_io_mapping":  return await hw.GetIoMappingAsync(A("device"));
+        case "generate_s7_1200":
+            RequireConfirm();
+            return await hw.GenerateS71200Async(new S71200Config {
+                DeviceName     = A("deviceName"),
+                CpuVariant     = A("cpuVariant"),
+                IpAddress      = A("ipAddress"),
+                SubnetMask     = A("subnetMask", "255.255.255.0"),
+                Gateway        = A("gateway"),
+                SignalModules  = AList<string>("signalModules"),
+                SignalBoards   = AList<string>("signalBoards"),
+                CommsModules   = AList<string>("commsModules"),
+                EnableProfinet = AB("enableProfinet", true),
+            });
+
         default: throw new InvalidOperationException($"Unknown tool: {name}");
     }
 }
+
+// The tool surface actually advertised, after --profile / TIA_MCP_PROFILE.
+List<object> McpToolDefsForProfile() =>
+    McpToolDefs().Where(d => InProfile(McpToolName(d))).ToList();
+
+// Definitions are anonymous types; read the name back off the one property we
+// need rather than restructuring every McpT call site around a named type.
+string McpToolName(object def) =>
+    def.GetType().GetProperty("name")?.GetValue(def) as string ?? "";
 
 List<object> McpToolDefs() => new()
 {
@@ -601,7 +810,7 @@ List<object> McpToolDefs() => new()
         McpP("name",        "string", true,  "New block name"),
         McpP("type",        "string", true,  "Block type: FB, FC, OB, or GlobalDB"),
         McpP("sourceCode",  "string", true,  "Full SCL source"),
-        McpP("number",      "string", false, "Block number (optional integer)")),
+        McpP("number",      "integer", false, "Block number — omit to let TIA Portal assign one")),
     McpT("list_tag_tables", "Lists all tag tables on a device with their names and tag counts.",
         McpP("device", "string", true, "Device name")),
     McpT("get_tags", "Returns all tags in a tag table with type, address, and comment.",
@@ -620,25 +829,159 @@ List<object> McpToolDefs() => new()
         McpP("device",          "string", true,  "Device name"),
         McpP("name",            "string", true,  "Instance DB name"),
         McpP("instanceOfName",  "string", true,  "FB name this DB is an instance of"),
-        McpP("number",          "string", false, "DB number (optional)")),
+        McpP("number",          "integer", false, "DB number — omit to let TIA Portal assign one")),
     McpT("import_tag_table", "Imports a complete tag table from SimaticML XML content (creates or replaces).",
         McpP("device",   "string", true, "Device name"),
         McpP("content",  "string", true, "SimaticML XML for the tag table")),
     McpT("batch_rename_tags", "Renames multiple tags in a tag table in a single atomic operation.",
         McpP("device",   "string", true, "Device name"),
         McpP("table",    "string", true, "Tag table name"),
-        McpP("renames",  "array",  true, "Array of {from, to} rename pairs")),
+        McpPArr("renames", true, "Rename pairs, applied in order",
+            McpP("from", "string", true, "Current tag name"),
+            McpP("to",   "string", true, "New tag name"))),
+
+    // ── HMI (WinCC Unified) ───────────────────────────────────────────────────
+    McpT("list_hmi_tag_tables", "Lists WinCC Unified HMI tag tables on an HMI device, with tag counts.",
+        McpP("device", "string", true, "HMI device name as shown in TIA Portal (often 'HMI')")),
+    McpT("get_hmi_tags", "Returns the tags in one WinCC Unified HMI tag table.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("table",  "string", true, "HMI tag table name")),
+    McpT("get_all_hmi_tags", "Returns every HMI tag on the device as a flat list — name, table, data type, and linked PLC tag.",
+        McpP("device", "string", true, "HMI device name")),
+    McpT("create_hmi_tags",
+        "Creates tags in a WinCC Unified HMI tag table. IMPORTANT: Openness can only create these as "
+      + "Internal tags — setting the PlcTag attribute throws for newly created tags, so the tags will "
+      + "have no PLC connection. Always tell the user they must open TIA Portal → HMI tags and set the "
+      + "Connection and PLC tag by hand afterwards, or the tags will not read anything.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("table",  "string", true, "Target HMI tag table"),
+        McpPArr("tags", true, "Tags to create",
+            McpP("name",       "string", true,  "HMI tag name"),
+            McpP("dataType",   "string", true,  "HMI data type, e.g. Bool, Int, Real"),
+            McpP("plcTag",     "string", false, "Intended PLC tag — recorded only; not applied (see above)"),
+            McpP("connection", "string", false, "Intended HMI connection name — recorded only; not applied"))),
+    McpT("list_hmi_screens", "Lists the screens on a WinCC Unified HMI device.",
+        McpP("device", "string", true, "HMI device name")),
+    McpT("get_screen_tag_refs", "Returns every tag referenced by an HMI screen and the screen item referencing it. Read-only.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen name")),
+    McpT("update_faceplate_tags", "Updates faceplate container interface parameters on an HMI screen — repoints a faceplate instance at different tags.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen name"),
+        McpPArr("updates", true, "Parameter updates to apply",
+            McpP("containerName", "string", true, "Faceplate container name on the screen"),
+            McpP("parameterName", "string", true, "Interface parameter to set"),
+            McpP("newValue",      "string", true, "New value, usually a tag name"))),
+
+    // ── Block inspection ──────────────────────────────────────────────────────
+    McpT("get_block_attributes", "Lists every readable and writable attribute and composition on a block. Use to discover what set_* operations are possible.",
+        McpP("device", "string", true, "Device name"),
+        McpP("block",  "string", true, "Block name")),
+    McpT("patch_block_texts", "Updates a block's title, comment, and per-network titles/comments without touching its logic.",
+        McpP("device", "string", true, "Device name"),
+        McpP("block",  "string", true, "Block name"),
+        McpPObj("texts", true, "Texts to patch — omit any field to leave it unchanged",
+            McpP("blockTitle",   "string", false, "Block title"),
+            McpP("blockComment", "string", false, "Block comment"),
+            McpPArr("networks", false, "Per-network texts, in network order",
+                McpP("title",   "string", false, "Network title"),
+                McpP("comment", "string", false, "Network comment")))),
+
+    // ── Project lifecycle ─────────────────────────────────────────────────────
+    McpT("open_project",
+        "Opens a TIA Portal project file from disk, starting a portal instance if none is running. "
+      + "Prefer connect_to_tia_portal when the user already has the project open.",
+        McpP("path",     "string",  true,  "Full path to the .ap20 project file"),
+        McpP("headless", "boolean", false, "Open without the TIA Portal UI (default true)")),
+    McpT("close_project",
+        "Closes the open project. Unsaved changes are lost unless the server is configured to auto-save, "
+      + "so call save_project first unless the user wants to discard their work.",
+        McpP("confirm", "boolean", true, "Must be true. Confirm with the user before closing.")),
+
+    // ── Export ────────────────────────────────────────────────────────────────
+    McpT("export_block", "Exports a block to a SimaticML XML file on disk and returns the path.",
+        McpP("device", "string", true,  "Device name"),
+        McpP("block",  "string", true,  "Block name"),
+        McpP("path",   "string", false, "Destination file path — defaults to the server's export directory")),
+    McpT("export_tag_table", "Exports a PLC tag table to a SimaticML XML file on disk and returns the path.",
+        McpP("device", "string", true,  "Device name"),
+        McpP("table",  "string", true,  "Tag table name"),
+        McpP("path",   "string", false, "Destination file path — defaults to the server's export directory")),
+
+    // ── Tag creation ──────────────────────────────────────────────────────────
+    McpT("create_tag_table", "Creates a new, empty PLC tag table on a device.",
+        McpP("device", "string", true, "Device name"),
+        McpP("table",  "string", true, "New tag table name")),
+    McpT("create_tag",
+        "Creates a single PLC tag in an existing tag table. To add many tags at once, build a SimaticML "
+      + "tag table and use import_tag_table — it is far fewer round-trips.",
+        McpP("device",     "string",  true,  "Device name"),
+        McpP("table",      "string",  true,  "Existing tag table name"),
+        McpP("name",       "string",  true,  "Tag name"),
+        McpP("dataType",   "string",  true,  "PLC data type, e.g. Bool, Int, Real"),
+        McpP("address",    "string",  true,  "Absolute address, e.g. %I0.0, %QW10, %M100.0"),
+        McpP("accessible", "boolean", false, "Accessible from HMI/OPC UA (default true)"),
+        McpP("writable",   "boolean", false, "Writable from HMI/OPC UA (default true)"),
+        McpP("comment",    "string",  false, "Tag comment")),
+
+    // ── Hardware ──────────────────────────────────────────────────────────────
+    McpT("get_device", "Returns details for one device — type, order number, firmware, and address.",
+        McpP("device", "string", true, "Device name")),
+    McpT("get_io_mapping", "Returns the I/O points of a device — module, channel, address, and direction. Use this to map physical I/O before writing tag tables.",
+        McpP("device", "string", true, "Device name")),
+    McpT("generate_s7_1200",
+        "Creates a new S7-1200 station with the given CPU, modules, and PROFINET address. "
+      + "Adds hardware to the project — confirm the CPU variant and IP with the user first.",
+        McpP("confirm",        "boolean", true,  "Must be true. Confirm the configuration with the user."),
+        McpP("deviceName",     "string",  true,  "Name for the new device"),
+        McpP("cpuVariant",     "string",  true,  "CPU key, e.g. '1214C-DC/DC/DC' or '1215C-AC/DC/Relay'"),
+        McpP("ipAddress",      "string",  true,  "PROFINET IP address, e.g. 192.168.0.1"),
+        McpP("subnetMask",     "string",  false, "Subnet mask (default 255.255.255.0)"),
+        McpP("gateway",        "string",  false, "Default gateway"),
+        McpPArrOf("signalModules", "string", false, "Signal module keys, e.g. 'SM1223-8DI-8DO-24VDC'"),
+        McpPArrOf("signalBoards",  "string", false, "Signal board keys, e.g. 'SB1232-1AO'"),
+        McpPArrOf("commsModules",  "string", false, "Comms module keys, e.g. 'CM1241-RS485'"),
+        McpP("enableProfinet", "boolean", false, "Create and connect a PN/IE subnet (default true)")),
 };
 
-object McpT(string name, string desc, params (string n, string t, bool r, string d)[] ps) => new {
+// A tool parameter carries a ready-made JSON Schema fragment rather than a bare
+// type name, so array and object params can declare their real shape. Describing
+// the shape only in prose ("array of {from, to} pairs") leaves the model guessing.
+object McpT(string name, string desc, params (string n, object s, bool r)[] ps) => new {
     name, description = desc,
     inputSchema = new {
         type       = "object",
-        properties = ps.ToDictionary(p => p.n, p => (object)new { type = p.t, description = p.d }),
+        properties = ps.ToDictionary(p => p.n, p => p.s),
         required   = ps.Where(p => p.r).Select(p => p.n).ToArray()
     }
 };
-(string n, string t, bool r, string d) McpP(string n, string t, bool r, string d) => (n, t, r, d);
+
+// Scalar: McpP("device", "string", true, "Device name")
+(string n, object s, bool r) McpP(string n, string t, bool r, string d)
+    => (n, new { type = t, description = d }, r);
+
+// Array of scalars: McpPArrOf("signalModules", "string", false, "…")
+(string n, object s, bool r) McpPArrOf(string n, string itemType, bool r, string d)
+    => (n, new { type = "array", description = d, items = new { type = itemType } }, r);
+
+// Array of objects: McpPArr("renames", true, "…", McpP("from", …), McpP("to", …))
+(string n, object s, bool r) McpPArr(string n, bool r, string d, params (string n, object s, bool r)[] item)
+    => (n, new {
+           type = "array", description = d,
+           items = new {
+               type       = "object",
+               properties = item.ToDictionary(p => p.n, p => p.s),
+               required   = item.Where(p => p.r).Select(p => p.n).ToArray()
+           }
+       }, r);
+
+// Nested object: McpPObj("texts", false, "…", McpP("blockTitle", …), …)
+(string n, object s, bool r) McpPObj(string n, bool r, string d, params (string n, object s, bool r)[] fields)
+    => (n, new {
+           type = "object", description = d,
+           properties = fields.ToDictionary(p => p.n, p => p.s),
+           required   = fields.Where(p => p.r).Select(p => p.n).ToArray()
+       }, r);
 
 // ── Shared MCP request handler (used by both HTTP and stdio) ──────────────────
 
@@ -667,7 +1010,7 @@ async Task<(object? result, object? rpcErr)> HandleMcpRequest(McpRpcRequest body
             result = new { };
             break;
         case "tools/list":
-            result = new { tools = McpToolDefs() };
+            result = new { tools = McpToolDefsForProfile() };
             break;
         case "tools/call":
             if (!body.Params.HasValue)

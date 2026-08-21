@@ -37,8 +37,15 @@ Both modes talk to the same REST server and the same TIA Portal connection.
 | **Browse tag tables** | See every tag, its data type, address, and comment |
 | **Import tag tables** | Import a complete tag table from SimaticML XML |
 | **Batch rename tags** | Rename many tags at once in a single atomic operation |
+| **Create tags** | Create a tag table, or add individual tags with type, address, and comment |
+| **Export blocks & tags** | Export any block or tag table to SimaticML XML on disk |
+| **I/O mapping** | List a device's I/O points — module, channel, address, direction |
+| **Generate an S7-1200** | Build a new station from a CPU variant, signal modules, and a PROFINET address |
 | **HMI tag tables** | List WinCC Unified tag tables and tag counts for any HMI device |
 | **HMI tag export** | Export all HMI tags with PLC connections, data types, and table assignments |
+| **HMI tag creation** | Create HMI tags in bulk (Internal only — the PLC link must be set by hand) |
+| **HMI screens** | List screens and every tag each screen references |
+| **Faceplate parameters** | Repoint a faceplate instance's interface parameters at different tags |
 | **Project signature** | Full index of every block and tag table across all devices |
 | **Clone project** | Duplicate the open project to a new folder with all hardware, blocks, and tags |
 | **Used products** | List the products/option packs the project references (e.g. StartDrive, Safety) |
@@ -153,6 +160,40 @@ Create (or edit) `C:\Users\<you>\.claude\.mcp.json`:
 
 > Use `~/.claude/.mcp.json`, **not** `~/.claude/settings.json`. The settings file has no `mcpServers` field and will silently ignore it.
 
+### Command line options
+
+| Flag | Effect |
+|---|---|
+| `--mcp-stdio` | Speak MCP over stdin/stdout instead of starting the dashboard and HTTP listener |
+| `--project <path>` | Open a `.ap20` project at startup, so the session doesn't spend its first tool call connecting |
+| `--with-ui` | With `--project`, open TIA Portal visibly instead of headless |
+| `--profile lite\|standard\|full` | Trim the advertised tool surface (default `full`). Also settable via the `TIA_MCP_PROFILE` environment variable |
+
+**Tool profiles.** The server exposes 38 tools, and 38 tool definitions is a lot of context to spend before the model has done anything. Pick the smallest surface that covers your session:
+
+| Profile | Tools | Contains |
+|---|---|---|
+| `lite` | 10 | Connect, browse devices/blocks/tags, read and write SCL, compile, save |
+| `standard` | 33 | Everything except project lifecycle and hardware generation |
+| `full` | 38 | Everything, including `open_project`, `close_project`, `clone_project`, `get_option_packages`, `generate_s7_1200` |
+
+Out-of-profile tools are refused at dispatch as well as hidden from `tools/list`, so a model that guesses a name still can't call it.
+
+A fully-specified entry looks like this:
+
+```json
+{
+  "mcpServers": {
+    "tia-portal": {
+      "command": "C:\\path\\to\\TiaPortalDashboard.exe",
+      "args": ["--mcp-stdio", "--profile", "standard", "--project", "C:\\Projects\\MyPlant.ap20"]
+    }
+  }
+}
+```
+
+If `--project` fails, the server still starts and the reason is written to stderr — stdout carries JSON-RPC frames and nothing else.
+
 ### Step 3 — Start TIA Portal and connect
 
 Before asking Claude Code to use the tools, make sure TIA Portal is open and you've run a connect call once (either via the dashboard or via the MCP `connect_to_tia_portal` tool). Claude Code will spawn a new headless instance of the exe; TIA Portal will show its approval dialog — click **Yes to all**.
@@ -173,7 +214,7 @@ The dashboard exposes all tools over MCP (Model Context Protocol) on `http://loc
 
 ### Step 2 — Verify tools appear
 
-Start a new conversation in Claude Desktop. Click the tools/hammer icon — you should see all 20 TIA Portal tools listed. If they don't appear, see the MCP troubleshooting section below.
+Start a new conversation in Claude Desktop. Click the tools/hammer icon — you should see all 38 TIA Portal tools listed. If they don't appear, see the MCP troubleshooting section below.
 
 ### What the server reports
 

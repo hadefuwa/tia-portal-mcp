@@ -106,8 +106,12 @@ thread while TIA Portal shows its access approval dialog. Consequences:
 
 ## MCP tools
 
-This is what Claude Code and Cursor actually see. All 20 tools are defined in `McpToolDefs()` and
+This is what Claude Code and Cursor actually see. All 38 tools are defined in `McpToolDefs()` and
 dispatched in `McpDispatch()` in `Program.cs`.
+
+`tools/list` returns `McpToolDefsForProfile()`, not the raw list — `--profile lite` advertises 10 tools
+and `--profile standard` advertises 33. `McpDispatch` re-checks the profile on every call, so hiding a
+tool also disables it. Default is `full`.
 
 | Tool | Required args | Optional | Returns |
 |---|---|---|---|
@@ -131,14 +135,46 @@ dispatched in `McpDispatch()` in `Program.cs`.
 | `clone_project` | `name`, `path` | — | Clone result |
 | `get_option_packages` | — | — | Array of option packages / used products |
 | `get_project_signature` | — | — | Full index of every device → blocks + tag tables |
+| `get_block_attributes` | `device`, `block` | — | Readable/writable attributes and compositions on a block |
+| `patch_block_texts` | `device`, `block`, `texts` | — | `{success:true}` — `texts` is `{blockTitle, blockComment, networks[{title, comment}]}` |
+| `list_hmi_tag_tables` | `device` | — | WinCC Unified tag tables with counts |
+| `get_hmi_tags` | `device`, `table` | — | Tags in one HMI tag table |
+| `get_all_hmi_tags` | `device` | — | Every HMI tag, flat, with table + linked PLC tag |
+| `create_hmi_tags` | `device`, `table`, `tags` | — | Created tags ⚠ Internal only — see below |
+| `list_hmi_screens` | `device` | — | Screens on the HMI device |
+| `get_screen_tag_refs` | `device`, `screen` | — | Tags referenced by a screen and the item referencing each |
+| `update_faceplate_tags` | `device`, `screen`, `updates` | — | Per-update result — `updates` is `[{containerName, parameterName, newValue}]` |
+| `open_project` | `path` | `headless` | Project info |
+| `close_project` | `confirm` | — | `{success:true}` ⚠ discards unsaved changes |
+| `export_block` | `device`, `block` | `path` | `{path:"…"}` — SimaticML XML |
+| `export_tag_table` | `device`, `table` | `path` | `{path:"…"}` — SimaticML XML |
+| `create_tag_table` | `device`, `table` | — | `{name, tagCount, comment}` |
+| `create_tag` | `device`, `table`, `name`, `dataType`, `address` | `accessible`, `writable`, `comment` | Created tag info |
+| `get_device` | `device` | — | One device's details |
+| `get_io_mapping` | `device` | — | I/O points: module, channel, address, direction |
+| `generate_s7_1200` | `confirm`, `deviceName`, `cpuVariant`, `ipAddress` | `subnetMask`, `gateway`, `signalModules`, `signalBoards`, `commsModules`, `enableProfinet` | Created device info |
+
+**Tool maturity:** the first 20 tools above plus `get_block_attributes`, `patch_block_texts` and the
+seven HMI tools are exercised by the dashboard's REST routes. The remaining nine — `open_project`,
+`close_project`, `export_block`, `export_tag_table`, `create_tag_table`, `create_tag`, `get_device`,
+`get_io_mapping`, `generate_s7_1200` — had **no caller at all** before they were wired to MCP. The
+service code compiles but has never run against a live project. If one misbehaves, suspect the service
+before you suspect your arguments.
 
 **Tool quirks worth knowing:**
 
 - ⚠ **`projectPath` on `connect_to_tia_portal` is ignored.** The schema advertises it, but dispatch
   calls `tia.AttachToRunningAsync()` with no argument. If several TIA Portal instances are open you
   cannot choose between them — close the ones you don't want.
-- **`number` is declared as a `string`** in every schema (`create_block`, `create_instance_db`) and
-  parsed with `int.TryParse`. Pass `"5"`, not `5`. Anything unparseable silently becomes auto-number.
+- **`number` is declared as an `integer`** on `create_block` and `create_instance_db`. Either `5` or
+  `"5"` is accepted — the `AIN()` accessor coerces both. Anything unparseable becomes auto-number.
+- ⚠ **`create_hmi_tags` cannot link tags to the PLC.** Openness throws on `SetAttribute("PlcTag", …)`
+  for newly created WinCC Unified tags, so they are always created as *Internal* tags. The `plcTag` and
+  `connection` arguments are accepted but not applied. Someone must set the Connection and PLC tag by
+  hand in TIA Portal afterwards, or the tags read nothing. This is stated in the tool description so
+  Claude relays it rather than silently producing dead tags.
+- **`close_project` and `generate_s7_1200` require `confirm: true`.** They throw a message telling the
+  model to check with the user first.
 - **`create_block` always creates SCL.** `type` selects FB / FC / OB / GlobalDB, but the language is
   hardcoded — there is no way to create a LAD/FBD/STL block through it. Use `import_block_xml` for those.
 - **Every tool except `connect_to_tia_portal` and `get_status` calls `EnsureConnected()`** and throws

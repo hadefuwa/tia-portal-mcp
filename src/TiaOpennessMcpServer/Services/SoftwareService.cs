@@ -227,9 +227,13 @@ public sealed class SoftwareService
             var plc   = GetPlcSoftware(deviceName);
             var block = FindBlock(plc.BlockGroup, blockName);
 
-            Directory.CreateDirectory(_opts.ExportDirectory);
             var path = exportPath ?? Path.Combine(
                 _opts.ExportDirectory, $"{deviceName}_{blockName}.xml");
+
+            // Create the parent of the resolved path, not just ExportDirectory —
+            // a caller-supplied path may point somewhere else entirely.
+            var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
             block.Export(new FileInfo(path), ExportOptions.WithDefaults);
             _log.LogInformation("Exported {Block} → {Path}", blockName, path);
