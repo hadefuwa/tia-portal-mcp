@@ -122,8 +122,13 @@ public sealed class TagService
         {
             var plc   = _sw.GetPlcSoftware(deviceName);
             var table = FindTagTable(plc.TagTableGroup, tableName);
+            // Openness writes SimaticML XML here — the previous .xlsx default
+            // produced an XML file with a spreadsheet extension.
             var path  = exportPath ?? Path.Combine(
-                _opts.ExportDirectory, $"{deviceName}_{tableName}_tags.xlsx");
+                _opts.ExportDirectory, $"{deviceName}_{tableName}_tags.xml");
+
+            var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
             table.Export(new FileInfo(path), ExportOptions.None);
             _log.LogInformation("Exported tag table '{Table}' → {Path}", tableName, path);
