@@ -173,6 +173,43 @@ Generated and temp XML files go to `C:\Temp\TiaExports` (configurable in `appset
 
 ---
 
+## LAD generation — `create_lad_block`
+
+`LadXmlBuilder` (`Utilities/`) turns a structured rung into SimaticML `FlgNet`. The model never writes UIds or wires. Reference exports live in `docs/lad-samples/`; tests are in `tests/LadXmlBuilder.Tests` (`dotnet test`, XML only, no TIA).
+
+Supported: NO/NC contact, coil / set (`scoil`) / reset (`rcoil`), `TON`, parallel `branch`. Blocks: FB, FC, OB. Anything else (compare, edge, TOF, block call) is not built yet — add it from a real export, not from memory.
+
+**Confirmed from real V20 exports** (these are what the builder copies):
+- FlgNet namespace is `.../NetworkSource/FlgNet/v5` in V20.
+- `Contact`/`Coil`/`SCoil`/`RCoil` pins are `in`, `operand`, `out`. NC is a child `<Negated Name="operand" />`, not an attribute.
+- `TON` needs `Version="1.0"`, `<TemplateValue Name="time_type" Type="Type">Time</TemplateValue>`, pins `IN`/`PT`/`Q`/`ET`. Unused `ET` is written as a wire to `<OpenCon UId=…/>`.
+- A source driving several pins is **one** `<Wire>` with several `<NameCon>` (the Powerrail feeding two parallel contacts is a single wire).
+- Parallel branches merge into a `Part Name="O"` with `<TemplateValue Name="Card" Type="Cardinality">N</…>` and pins `in1…inN`/`out`. Branch paths share the incoming wire; an empty path cannot be expressed.
+- `T#5s` is a `TypedConstant`; a numeric literal is a `LiteralConstant` with `<ConstantType>`.
+- Interface/`Namespace` rules are the same as GlobalDB above: `<Namespace />` is a child element; omit `MultilingualText` unless the project culture is passed (`culture`), or en-US vs en-GB breaks the import.
+
+**Verified live on V20 (imported, compiled with 0 errors, re-exported; goldens are `docs/lad-samples/05-08`, tests in `LiveGoldenTests.cs`):**
+- Seal-in FB (branch + NC contact + coil, `#local` operands); FC (`Ret_Val`/`Void` is kept by TIA); OB (`SecondaryType` `ProgramCycle`).
+- `TON` with `#Tmr` declared in Static as `TON`: plain `Instance Scope="LocalVariable"` component. TIA re-exports the member as `TON_TIME`.
+- A block referencing tags that do not exist **imports**, then fails compile with `Tag "X" not defined.` The error text is in nested compiler messages (`CompileBlockAsync` now flattens them).
+- Round-trip: re-importing unchanged exports of an FB, an FC and an FB with timers under new names (`Name` replaced, `Number` removed, `AutoNumber` true) imports and compiles cleanly.
+- TIA renumbers UIds on re-export, so goldens compare wiring topology, not text.
+
+**Found and fixed from live errors:**
+- OB: TIA refuses an auto-numbered ProgramCycle OB (`'Number' attribute is missing`). The service now picks the lowest free number >= 123 (dryRun shows 123).
+- OB: interface may only have Input/Temp/Constant; an `Output`/`InOut` section is rejected (`Section 'Output' is not valid for this block`). The builder omits them and throws on OB output/inOut/static members.
+- `CreateInstanceDbXml` had the `Namespace`-as-attribute bug and an en-US comment; fixed (verified: instance DB of an FB imports).
+- Import fails with "not supported in online mode" if the PLC is online: go offline first.
+
+**Still NOT verified:**
+- Timer with a non-`#` instance name (`Scope="GlobalVariable"`): it imports but compile fails with `Missing instance DB`, because the DB does not exist. An IEC timer DB cannot be created via `InstanceDB` with `InstanceOfName` `TON`/`TON_TIME` (`Block does not exist`). Needs a real export of a hand-made one (drop a TON in LAD with "single instance") before the builder or `create_instance_db` can support it.
+- TOF/TP, compare, edge and block-call elements are still not built.
+- Only checked on an S7-1200; S7-1500 may differ.
+
+**Workflow:** `create_lad_block` refuses to replace an existing block unless `overwrite:true`, runs a pre-flight check (unique UIds, wire endpoints resolve, no input pin driven twice, XML well-formed) before touching TIA, and returns the compile output. Compiling is not correctness: have the user review the logic.
+
+---
+
 ## WinCC Unified HMI tag API — confirmed behaviours
 
 Tested against TIA Portal V20 with WinCC Unified. Use `HmiTagService` for all HMI tag operations.

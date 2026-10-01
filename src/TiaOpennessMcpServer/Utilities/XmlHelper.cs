@@ -109,6 +109,16 @@ public static class XmlHelper
     }
 
     /// <summary>
+    /// Generates SimaticML XML for a LAD block: one CompileUnit per network, UIds and wires
+    /// auto-assigned. Mirrors <see cref="CreateSclBlockXml"/>; see <see cref="LadXmlBuilder"/>.
+    /// Throws <see cref="LadValidationException"/> if the pre-flight check fails.
+    /// </summary>
+    public static string CreateLadBlockXml(
+        string blockName, string blockType, int? blockNumber,
+        LadInterface? iface, IReadOnlyList<LadNetwork> networks, string? cultureName = null)
+        => LadXmlBuilder.CreateLadBlockXml(blockName, blockType, blockNumber, iface, networks, cultureName);
+
+    /// <summary>
     /// Generates SimaticML XML for a GlobalDB by parsing VAR...END_VAR from SCL source.
     /// GlobalDB uses member declarations, not CompileUnits.
     /// </summary>
@@ -117,9 +127,17 @@ public static class XmlHelper
         var number  = blockNumber.HasValue ? $" Number=\"{blockNumber}\"" : "";
         var autoNum = blockNumber.HasValue ? "false" : "true";
 
-        var members = ParseSclVarSection(sclSource);
+        var members     = ParseSclVarSection(sclSource);
+        var startValues = ParseSclStartValues(sclSource);
+
         var memberXml = string.Join("\n", members.Select(m =>
-            $"              <Member Name=\"{SecurityElement.Escape(m.Name)}\" Datatype=\"{SecurityElement.Escape(m.Type)}\" />"));
+        {
+            var name = SecurityElement.Escape(m.Name);
+            var type = SecurityElement.Escape(m.Type);
+            if (startValues.TryGetValue(m.Name, out var sv))
+                return $"              <Member Name=\"{name}\" Datatype=\"{type}\">\n                <StartValue>{SecurityElement.Escape(sv)}</StartValue>\n              </Member>";
+            return $"              <Member Name=\"{name}\" Datatype=\"{type}\" />";
+        }));
 
         return $"""
             <?xml version="1.0" encoding="utf-8"?>
@@ -156,6 +174,27 @@ public static class XmlHelper
         return members;
     }
 
+    // Parses the BEGIN...END_DATA_BLOCK section for start value assignments, e.g.:
+    //   Colour1 := '000100';
+    //   ToggleCount := 50;
+    private static IReadOnlyDictionary<string, string> ParseSclStartValues(string sclSource)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var beginMatch = System.Text.RegularExpressions.Regex.Match(
+            sclSource, @"\bBEGIN\b(.*?)(?:END_DATA_BLOCK|$)",
+            System.Text.RegularExpressions.RegexOptions.Singleline |
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!beginMatch.Success) return result;
+
+        var body = beginMatch.Groups[1].Value;
+        var rx = new System.Text.RegularExpressions.Regex(
+            @"(\w+)\s*:=\s*(.+?)\s*;",
+            System.Text.RegularExpressions.RegexOptions.Multiline);
+        foreach (System.Text.RegularExpressions.Match m in rx.Matches(body))
+            result[m.Groups[1].Value] = m.Groups[2].Value.Trim();
+        return result;
+    }
+
     /// <summary>Generates SimaticML XML for an InstanceDB block.</summary>
     public static string CreateInstanceDbXml(string name, string instanceOfName, int? number)
     {
@@ -169,21 +208,13 @@ public static class XmlHelper
                 <AttributeList>
                   <AutoNumber>{autoNum}</AutoNumber>
                   <InstanceOfName>{instanceOfName}</InstanceOfName>
-                  <Name>{name}</Name>{numAttr}
+                  <InstanceOfType>FB</InstanceOfType>
+                  <Name>{name}</Name>
+                  <Namespace />{numAttr}
                   <ProgrammingLanguage>DB</ProgrammingLanguage>
                 </AttributeList>
-                <ObjectList>
-                  <MultilingualText ID="1" CompositionName="Comment">
-                    <ObjectList>
-                      <MultilingualTextItem ID="2" CompositionName="Items">
-                        <AttributeList>
-                          <Culture>en-US</Culture>
-                          <Text />
-                        </AttributeList>
-                      </MultilingualTextItem>
-                    </ObjectList>
-                  </MultilingualText>
-                </ObjectList>
+                <ObjectList />   <!-- no MultilingualText: en-US would break an en-GB project -->
+
               </SW.Blocks.InstanceDB>
             </Document>
             """;

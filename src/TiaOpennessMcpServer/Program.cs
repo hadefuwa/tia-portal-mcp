@@ -67,7 +67,7 @@ var liteTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 var standardTools = new HashSet<string>(liteTools, StringComparer.OrdinalIgnoreCase)
 {
     "analyze_block", "analyze_scl", "create_block", "create_instance_db",
-    "import_block_xml", "import_tag_table", "batch_rename_tags",
+    "import_block_xml", "create_lad_block", "import_tag_table", "batch_rename_tags",
     "get_project_signature", "get_block_attributes", "patch_block_texts",
     "create_tag_table", "create_tag", "export_block", "export_tag_table",
     "get_device", "get_io_mapping",
@@ -266,6 +266,18 @@ async Task HandleAsync(HttpListenerContext ctx)
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
+        // ── LAD block from structured description ────────────────────────────
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/blocks/lad", out m))
+        {
+            try
+            {
+                var body = await ReadJson<LadBlockRequest>(req);
+                if (body is null) { await Json(res, new { error = "Request body required." }, 400); return; }
+                await Json(res, await sw.CreateLadBlockAsync(m["device"], body));
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
         // ── Block compile ─────────────────────────────────────────────────────
         else if (method == "POST" && TryMatch(path, "/api/devices/{device}/blocks/{block}/xml", out m))
         {
@@ -281,6 +293,13 @@ async Task HandleAsync(HttpListenerContext ctx)
         else if (method == "POST" && TryMatch(path, "/api/devices/{device}/blocks/{block}/compile", out m))
         {
             try   { await Json(res, new { result = await sw.CompileBlockAsync(m["device"], m["block"]) }); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── Block delete ──────────────────────────────────────────────────────
+        else if (method == "DELETE" && TryMatch(path, "/api/devices/{device}/blocks/{block}", out m))
+        {
+            try   { await sw.DeleteBlockAsync(m["device"], m["block"]); await Json(res, new { success = true }); }
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
@@ -406,6 +425,27 @@ async Task HandleAsync(HttpListenerContext ctx)
                 var body = await ReadJson<List<FaceplateTagUpdate>>(req);
                 if (body is null || body.Count == 0) { await Json(res, new { error = "body required: array of {containerName, parameterName, newValue}" }, 400); return; }
                 await Json(res, await hmiScreenSvc.UpdateFaceplateTagsAsync(m["device"], m["screen"], body));
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── HMI screens — scan all screens for tag refs (optional filter) ───
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/hmi/screens/scan", out m))
+        {
+            var filter = req.QueryString["filter"];
+            try   { await Json(res, await hmiScreenSvc.ScanAllTagRefsAsync(m["device"], filter)); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── HMI screens — replace tag pattern across all screens ─────────────
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/hmi/screens/replace-tag-pattern", out m))
+        {
+            try
+            {
+                var body = await ReadJson<Dictionary<string, string>>(req);
+                if (body is null || !body.ContainsKey("pattern") || !body.ContainsKey("replacement"))
+                { await Json(res, new { error = "body required: {pattern, replacement}" }, 400); return; }
+                await Json(res, await hmiScreenSvc.ReplaceTagPatternAsync(m["device"], body["pattern"], body["replacement"]));
             }
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
@@ -668,6 +708,19 @@ async Task<object?> McpDispatch(JsonElement p)
         case "write_block_scl":        await sw.WriteBlockSclAsync(A("device"), A("block"), A("source")); return new { success = true };
         case "import_block_xml":       await sw.WriteBlockXmlAsync(A("device"), A("block"), A("content")); return new { success = true };
         case "compile_block":          return new { result = await sw.CompileBlockAsync(A("device"), A("block")) };
+        case "create_lad_block":
+            return await sw.CreateLadBlockAsync(A("device"), new LadBlockRequest
+            {
+                Name      = A("name"),
+                Type      = A("type", "FB"),
+                Number    = AIN("number"),
+                Interface = AObj<LadInterface>("interface"),
+                Networks  = AList<LadNetwork>("networks"),
+                Culture   = AN("culture"),
+                Overwrite = AB("overwrite"),
+                Compile   = AB("compile", true),
+                DryRun    = AB("dryRun"),
+            });
         case "analyze_block":
         {
             var blk = await sw.ReadBlockAsync(A("device"), A("block"));
@@ -811,6 +864,41 @@ List<object> McpToolDefs() => new()
         McpP("type",        "string", true,  "Block type: FB, FC, OB, or GlobalDB"),
         McpP("sourceCode",  "string", true,  "Full SCL source"),
         McpP("number",      "integer", false, "Block number — omit to let TIA Portal assign one")),
+    McpT("create_lad_block",
+        "Creates a LAD block from a structured rung description, imports it, and compiles it. You never write "
+      + "XML, UIds or wires. Each network is series logic in 'elements' (contact, ton, branch) ending in "
+      + "'outputs' (coil, scoil, rcoil). A seal-in is one network: elements=[branch[[contact Start],[contact Motor]], "
+      + "contact Stop negated], outputs=[coil Motor]. Operands: Tag, \"DB\".Member, #localVar; ton pt like T#5s. "
+      + "Always read the compile output, and ask the user to review the logic: compiling does not prove it "
+      + "behaves correctly. Use dryRun:true to validate and see the XML without touching TIA Portal.",
+        McpP("device",    "string",  true,  "Device name"),
+        McpP("name",      "string",  true,  "New block name"),
+        McpP("type",      "string",  true,  "FB, FC or OB"),
+        McpP("number",    "integer", false, "Block number — omit to auto-assign"),
+        ("interface", (object)new {
+            type = "object",
+            description = "Interface members by section. Each section is an array of {name, datatype}.",
+            properties = new Dictionary<string, object>
+            {
+                ["input"]    = LadMemberArraySchema(), ["output"] = LadMemberArraySchema(),
+                ["inOut"]    = LadMemberArraySchema(), ["static"] = LadMemberArraySchema(),
+                ["temp"]     = LadMemberArraySchema(), ["constant"] = LadMemberArraySchema(),
+            } }, false),
+        ("networks", (object)new {
+            type = "array", description = "Networks (rungs), in order.",
+            items = new {
+                type = "object",
+                properties = new Dictionary<string, object>
+                {
+                    ["title"]    = new { type = "string", description = "Optional; needs 'culture' on the tool call" },
+                    ["comment"]  = new { type = "string", description = "Optional; needs 'culture' on the tool call" },
+                    ["elements"] = LadElementArraySchema(depth: 2),
+                    ["outputs"]  = LadElementArraySchema(depth: 0),
+                } } }, true),
+        McpP("culture",   "string",  false, "Project culture, e.g. en-GB. Only needed when networks have titles/comments; must match the project."),
+        McpP("overwrite", "boolean", false, "Replace an existing block of the same name. Default false."),
+        McpP("compile",   "boolean", false, "Compile after import. Default true."),
+        McpP("dryRun",    "boolean", false, "Validate and return the XML only; do not import.")),
     McpT("list_tag_tables", "Lists all tag tables on a device with their names and tag counts.",
         McpP("device", "string", true, "Device name")),
     McpT("get_tags", "Returns all tags in a tag table with type, address, and comment.",
@@ -955,6 +1043,50 @@ object McpT(string name, string desc, params (string n, object s, bool r)[] ps) 
         required   = ps.Where(p => p.r).Select(p => p.n).ToArray()
     }
 };
+
+object LadMemberArraySchema() => new {
+    type = "array",
+    items = new {
+        type = "object",
+        properties = new Dictionary<string, object>
+        {
+            ["name"]     = new { type = "string" },
+            ["datatype"] = new { type = "string", description = "e.g. Bool, Int, Real, Time" },
+        },
+        required = new[] { "name", "datatype" },
+    },
+};
+
+// LAD element schema. 'branch' nests elements; JSON Schema fragments here are finite, so nesting
+// is unrolled to a fixed depth (branch-in-branch-in-branch is already more than a rung needs).
+object LadElementArraySchema(int depth) => new {
+    type = "array",
+    items = new {
+        type = "object",
+        properties = LadElementProps(depth),
+        required = new[] { "type" },
+    },
+};
+
+Dictionary<string, object> LadElementProps(int depth)
+{
+    var p = new Dictionary<string, object>
+    {
+        ["type"]     = new { type = "string", description = "contact | ton | branch (elements); coil | scoil | rcoil (outputs)" },
+        ["operand"]  = new { type = "string", description = "contact/coil tag: Tag, \"DB\".Member or #local" },
+        ["negated"]  = new { type = "boolean", description = "contact only: true = normally closed" },
+        ["instance"] = new { type = "string", description = "ton only: #Tmr (FB multi-instance) or instance DB name" },
+        ["pt"]       = new { type = "string", description = "ton only: preset, e.g. T#5s" },
+    };
+    if (depth > 0)
+        p["branches"] = new
+        {
+            type = "array",
+            description = "branch only: 2+ parallel paths, each an array of elements",
+            items = LadElementArraySchema(depth - 1),
+        };
+    return p;
+}
 
 // Scalar: McpP("device", "string", true, "Device name")
 (string n, object s, bool r) McpP(string n, string t, bool r, string d)
