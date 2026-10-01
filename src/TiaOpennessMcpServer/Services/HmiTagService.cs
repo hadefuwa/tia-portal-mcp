@@ -80,7 +80,9 @@ public sealed class HmiTagService
                         results.Add(new { name = req.Name, status = "skipped", reason = "already exists" });
                         continue;
                     }
-                    // Tag exists but has no PLC link — patch it
+                    // Tag exists but has no PLC link — patch DataType and PlcTag
+                    if (!string.IsNullOrEmpty(req.DataType))
+                        existing.SetAttribute("DataType", req.DataType);
                     if (!string.IsNullOrEmpty(req.PlcTag))
                         existing.SetAttribute("PlcTag", req.PlcTag);
                     results.Add(new { name = req.Name, status = "updated", plcTag = req.PlcTag });
