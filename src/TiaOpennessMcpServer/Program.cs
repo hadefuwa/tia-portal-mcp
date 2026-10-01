@@ -1153,6 +1153,22 @@ Dictionary<string, object> LadElementProps(int depth)
             },
         },
     };
+    p["operands"]  = new { type = "array", items = new { type = "string" }, description = "add/mul (2+) or sub/div/mod (exactly 2): input values; 'operand' is the result destination. These end the rung like move" };
+    p["destType"]  = new { type = "string", description = "norm_x/scale_x: result type (default Real); 'dataType' is the input type (norm_x default Int, scale_x Real)" };
+    p["pv"]        = new { type = "string", description = "ctu/ctd: preset value" };
+    p["name"]      = new { type = "string", description = "part only: instruction name exactly as TIA exports it, e.g. WR_SYS_T" };
+    p["version"]   = new { type = "string", description = "part only: instruction version, e.g. 1.0" };
+    p["templates"] = new { type = "object", additionalProperties = new { type = "string" }, description = "part only: template values, e.g. {\"date_type\":\"DTL\"}" };
+    p["inPins"]    = new { type = "object", additionalProperties = new { type = "string" }, description = "part: input pin -> operand. norm_x/scale_x need min, value and max" };
+    p["outPins"]   = new { type = "object", additionalProperties = new { type = "string" }, description = "part only: output pin -> destination operand" };
+    p["eno"]       = new { type = "boolean", description = "part only: true if power flow continues from the box's eno; default false (ends the rung)" };
+    if (depth > 0)
+        p["other"] = new
+        {
+            type = "array",
+            description = "sr: reset path, rs: set path, ctu: reset path, ctd: load path. Elements starting at the power rail",
+            items = LadElementArraySchema(depth - 1),
+        };
     if (depth > 0)
         p["branches"] = new
         {

@@ -179,7 +179,7 @@ before you suspect your arguments.
 - **`create_block` always creates SCL.** `type` selects FB / FC / OB / GlobalDB, but the language is
   hardcoded. For LAD use `create_lad_block`; for FBD/STL use `import_block_xml`.
 - **`create_lad_block` limits (verified live on V20 / S7-1200):** supports contact (NC), coil/set/reset, compares
-  (`eq ne gt ge lt le`), edge detect (`pbox`/`nbox`), `ton`/`tof`/`tp`, parallel branches, `move` (last element
+  (`eq ne gt ge lt le`), edge detect (`pbox`/`nbox`), `ton`/`tof`/`tp`, `ctu`/`ctd`, `sr`/`rs`, arithmetic, `norm_x`/`scale_x`, a generic system-function `part`, parallel branches, `move` (last element
   only) and `call` of an FB (instance DB or `#multi`) or FC with named parameters. An OB is auto-numbered from
   123 up and takes only input/temp/constant members. A timer needs a `#local` instance declared in Static
   (type `TON`/`TOF`/`TP`); a global timer DB is not supported yet.

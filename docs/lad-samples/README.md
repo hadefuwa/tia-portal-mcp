@@ -19,6 +19,11 @@ from them without a new export proving the alternative imports cleanly.
 | 11-live-call-fb-instance-db.xml | `Call` of an FB with `Instance Scope="GlobalVariable"` |
 | 12-live-call-fb-multi-instance.xml | `Call` of an FB with `Instance Scope="LocalVariable"` (multi-instance) |
 | 13-live-call-no-params-ob.xml | Param-less FB call in an OB; TIA adds the parameter list and `OpenCon` for eno/outputs |
+| 14-live-add-3-inputs-fb.xml ... 18-live-mod-fb.xml | `Add` (Card=3), `Sub`, `Mul`, `Div`, `Mod`: `DisabledENO`, `AutomaticTyped SrcType` |
+| 19-live-normalize-scale-x-fb.xml | `Normalize` -> `Scale_X` chained through `eno` |
+| 20-live-sr-rs-fb.xml | `Sr` (`s`, `r1`) and `Rs` (`r`, `s1`) with a memory `operand` |
+| 21-live-ctu-ctd-fb.xml | `CTU`/`CTD` with multi-instance, `PV`, `CV` open, output `Q` |
+| 22-live-system-function-wr-sys-t-fb.xml | `WR_SYS_T` as a `Part` with `Version` and `date_type` |
 
 Format facts confirmed here:
 - `FlgNet` namespace is `.../NetworkSource/FlgNet/v5` in V20.

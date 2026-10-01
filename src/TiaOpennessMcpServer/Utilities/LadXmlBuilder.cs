@@ -35,6 +35,26 @@ public sealed class LadElement
     public string? BlockType { get; set; }
     /// <summary>call only: parameters to wire. Each needs name, section, datatype and operand.</summary>
     public List<LadParam>? Parameters { get; set; }
+    /// <summary>add/sub/mul/div/mod: the input values (in1..inN); <see cref="Operand"/> is the result destination.</summary>
+    public List<string>? Operands { get; set; }
+    /// <summary>norm_x/scale_x: result type (Real default); <see cref="DataType"/> is the input type.</summary>
+    public string? DestType { get; set; }
+    /// <summary>counters: preset value (PV).</summary>
+    public string? Pv { get; set; }
+    /// <summary>sr/rs/ctu/ctd: the second power path, starting at the power rail. sr: reset path; rs: set path; ctu: reset path (R); ctd: load path (LD).</summary>
+    public List<LadElement>? Other { get; set; }
+    /// <summary>part only: instruction name exactly as TIA exports it, e.g. "WR_SYS_T".</summary>
+    public string? Name { get; set; }
+    /// <summary>part only: instruction version, e.g. "1.0".</summary>
+    public string? Version { get; set; }
+    /// <summary>part only: template values, e.g. {"date_type":"DTL"}. "Card" is written as a Cardinality, anything else as a Type.</summary>
+    public Dictionary<string, string>? Templates { get; set; }
+    /// <summary>part only: input pin name -> operand.</summary>
+    public Dictionary<string, string>? InPins { get; set; }
+    /// <summary>part only: output pin name -> destination operand.</summary>
+    public Dictionary<string, string>? OutPins { get; set; }
+    /// <summary>part only: true if the box has an eno that power flow continues from. Default false (terminal).</summary>
+    public bool Eno { get; set; }
 }
 
 public sealed class LadParam
@@ -105,7 +125,7 @@ public static class LadXmlBuilder
             throw new ArgumentException("A network needs at least one element or output.");
 
         if (ctx.Terminated && net.Outputs.Count > 0)
-            throw new ArgumentException("a network ending in 'move' cannot have outputs; use a separate network.");
+            throw new ArgumentException("a network ending in a terminal box (move, add, sub, ...) cannot have outputs; use a separate network.");
 
         foreach (var o in net.Outputs)
         {
@@ -132,7 +152,7 @@ public static class LadXmlBuilder
         foreach (var e in items)
         {
             if (ctx.Terminated)
-                throw new ArgumentException($"nothing can follow a 'move' ({where}); put it last, with no outputs after it. Use a separate network.");
+                throw new ArgumentException($"nothing can follow a terminal box such as move/add ({where}); put it last, with no outputs after it. Use a separate network.");
             switch (e.Type.ToLowerInvariant())
             {
                 case "contact":
@@ -225,6 +245,90 @@ public static class LadXmlBuilder
                     cur = Endpoint.Pin(uid, "eno");
                     break;
                 }
+                case "add": case "mul": case "sub": case "div": case "mod":
+                {
+                    // Arithmetic boxes are DisabledENO (no eno), so like move they end the rung.
+                    var t = e.Type.ToLowerInvariant();
+                    var ops = e.Operands ?? new List<string>();
+                    bool nary = t is "add" or "mul";
+                    if (nary ? ops.Count < 2 : ops.Count != 2)
+                        throw new ArgumentException($"{t} requires 'operands' with {(nary ? "2 or more values" : "exactly 2 values")} and 'operand' (the result destination).");
+                    var content = new List<XElement>();
+                    if (nary) content.Add(Template("Card", "Cardinality", ops.Count.ToString()));
+                    content.Add(new XElement(FlgNs + "AutomaticTyped", new XAttribute("Name", "SrcType")));
+                    EmitBox(ctx, cur, char.ToUpperInvariant(t[0]) + t.Substring(1), null, true, content, null, "en",
+                        ops.Select((o, i) => ("in" + (i + 1), o)).ToList(), new() { ("out", RequireOperand(e)) }, null);
+                    ctx.Terminated = true;
+                    cur = Endpoint.Power;
+                    break;
+                }
+                case "norm_x": case "scale_x":
+                {
+                    // Pins en/eno/min/value/max/out. min/value/max come from 'inPins'; 'operand' is the result destination.
+                    var pins = e.InPins ?? new Dictionary<string, string>();
+                    foreach (var need in new[] { "min", "value", "max" })
+                        if (!pins.ContainsKey(need)) throw new ArgumentException($"{e.Type} requires inPins.{need}.");
+                    bool norm = e.Type.Equals("norm_x", StringComparison.OrdinalIgnoreCase);
+                    var content = new List<XElement>
+                    {
+                        Template("SrcType",  "Type", string.IsNullOrWhiteSpace(e.DataType) ? (norm ? "Int" : "Real") : e.DataType!),
+                        Template("DestType", "Type", string.IsNullOrWhiteSpace(e.DestType) ? "Real" : e.DestType!),
+                    };
+                    cur = EmitBox(ctx, cur, norm ? "Normalize" : "Scale_X", null, true, content, null, "en",
+                        new() { ("min", pins["min"]), ("value", pins["value"]), ("max", pins["max"]) },
+                        new() { ("out", RequireOperand(e)) }, "eno");
+                    break;
+                }
+                case "sr": case "rs":
+                {
+                    // Flip-flop: the preceding rung flow drives the first input, 'other' (from the power rail) the second.
+                    bool sr = e.Type.Equals("sr", StringComparison.OrdinalIgnoreCase);
+                    if (e.Other is null || e.Other.Count == 0)
+                        throw new ArgumentException($"{e.Type} requires 'other': the {(sr ? "reset" : "set")} path (elements starting at the power rail).");
+                    var second = EmitSeries(ctx, e.Other, Endpoint.Power, $"{where}.{e.Type}.other");
+                    var uid = ctx.NewUId();
+                    ctx.Parts.Add(new XElement(FlgNs + "Part", new XAttribute("Name", sr ? "Sr" : "Rs"), new XAttribute("UId", uid)));
+                    ctx.Connect(cur, uid, sr ? "s" : "r");
+                    ctx.Connect(second, uid, sr ? "r1" : "s1");
+                    ctx.ConnectOperand(RequireOperand(e), uid, "operand");
+                    cur = Endpoint.Pin(uid, "q");
+                    break;
+                }
+                case "ctu": case "ctd":
+                {
+                    bool up = e.Type.Equals("ctu", StringComparison.OrdinalIgnoreCase);
+                    if (string.IsNullOrWhiteSpace(e.Instance)) throw new ArgumentException($"{e.Type} requires 'instance' (\"#Cnt\" multi-instance or an instance DB name).");
+                    if (string.IsNullOrWhiteSpace(e.Pv))       throw new ArgumentException($"{e.Type} requires 'pv' (preset value).");
+                    if (e.Other is null || e.Other.Count == 0) throw new ArgumentException($"{e.Type} requires 'other': the {(up ? "reset (R)" : "load (LD)")} path (elements starting at the power rail).");
+                    var second = EmitSeries(ctx, e.Other, Endpoint.Power, $"{where}.{e.Type}.other");
+                    var content = new List<XElement>
+                    {
+                        Template("value_type", "Type", string.IsNullOrWhiteSpace(e.DataType) ? "Int" : e.DataType!),
+                    };
+                    var uid = ctx.NewUId();
+                    var part = new XElement(FlgNs + "Part", new XAttribute("Name", up ? "CTU" : "CTD"),
+                        new XAttribute("Version", "1.0"), new XAttribute("UId", uid), ctx.InstanceElement(e.Instance!), content);
+                    ctx.Parts.Add(part);
+                    ctx.Connect(cur, uid, up ? "CU" : "CD");
+                    ctx.Connect(second, uid, up ? "R" : "LD");
+                    ctx.ConnectOperand(e.Pv!, uid, "PV");
+                    ctx.OpenOutput(uid, "CV");
+                    cur = Endpoint.Pin(uid, "Q"); // TIA re-exports CTU/CTD output as Q (QU/QD are CTUD)
+                    break;
+                }
+                case "part":
+                {
+                    // Escape hatch for system functions (WR_SYS_T, WWW, ...). Pin names must be exactly TIA's;
+                    // copy them from a real export. Terminal unless 'eno' is true.
+                    if (string.IsNullOrWhiteSpace(e.Name)) throw new ArgumentException("part requires 'name' (the instruction name exactly as TIA exports it).");
+                    var content = (e.Templates ?? new()).Select(kv =>
+                        Template(kv.Key, kv.Key == "Card" ? "Cardinality" : "Type", kv.Value)).ToList();
+                    cur = EmitBox(ctx, cur, e.Name!, e.Version, false, content, e.Instance, "en",
+                        (e.InPins ?? new()).Select(kv => (kv.Key, kv.Value)).ToList(),
+                        (e.OutPins ?? new()).Select(kv => (kv.Key, kv.Value)).ToList(), e.Eno ? "eno" : null);
+                    if (!e.Eno) ctx.Terminated = true;
+                    break;
+                }
                 case "ton": case "tof": case "tp":
                 {
                     var timer = e.Type.ToUpperInvariant();
@@ -256,7 +360,7 @@ public static class LadXmlBuilder
                             throw new ArgumentException($"branch path {i + 1} is empty; an empty path is a bare wire, which LAD cannot express here.");
                         outs.Add(EmitSeries(ctx, e.Branches[i], cur, $"{where}.branch[{i}]"));
                         if (ctx.Terminated)
-                            throw new ArgumentException($"'move' cannot be inside a branch ({where}.branch[{i}]); it has no power-flow output to merge.");
+                            throw new ArgumentException($"a terminal box (move, add, ...) cannot be inside a branch ({where}.branch[{i}]); it has no power-flow output to merge.");
                     }
                     var uid = ctx.NewUId();
                     ctx.Parts.Add(new XElement(FlgNs + "Part",
@@ -273,10 +377,35 @@ public static class LadXmlBuilder
                         $"'{e.Type}' belongs in the network's 'outputs', not in 'elements' ({where}).");
                 default:
                     throw new ArgumentException(
-                        $"Unsupported element type '{e.Type}' ({where}). Supported elements: contact, eq/ne/gt/ge/lt/le, pbox, nbox, ton, tof, tp, branch, call, move; outputs: coil, scoil, rcoil.");
+                        $"Unsupported element type '{e.Type}' ({where}). Supported elements: contact, eq/ne/gt/ge/lt/le, pbox, nbox, ton, tof, tp, ctu, ctd, sr, rs, branch, call, move, add/sub/mul/div/mod, norm_x, scale_x, part; outputs: coil, scoil, rcoil.");
             }
         }
         return cur;
+    }
+
+    private static XElement Template(string name, string type, string value) =>
+        new XElement(FlgNs + "TemplateValue", new XAttribute("Name", name), new XAttribute("Type", type), value);
+
+    /// <summary>
+    /// Emits one box: the part, power flow into <paramref name="flowIn"/>, value inputs, value outputs, and
+    /// returns the endpoint power flow continues from (<paramref name="flowOut"/>, or the rail if the box is terminal).
+    /// </summary>
+    private static Endpoint EmitBox(Ctx ctx, Endpoint cur, string name, string? version, bool disabledEno,
+        List<XElement> content, string? instance, string flowIn,
+        List<(string Pin, string Operand)> ins, List<(string Pin, string Operand)> outs, string? flowOut)
+    {
+        var uid = ctx.NewUId();
+        var part = new XElement(FlgNs + "Part", new XAttribute("Name", name));
+        if (version is not null) part.Add(new XAttribute("Version", version));
+        part.Add(new XAttribute("UId", uid));
+        if (disabledEno) part.Add(new XAttribute("DisabledENO", "true"));
+        if (!string.IsNullOrWhiteSpace(instance)) part.Add(ctx.InstanceElement(instance!));
+        part.Add(content);
+        ctx.Parts.Add(part);
+        ctx.Connect(cur, uid, flowIn);
+        foreach (var (pin, op) in ins)  ctx.ConnectOperand(op, uid, pin);
+        foreach (var (pin, op) in outs) ctx.ConnectOperandOut(uid, pin, op);
+        return flowOut is null ? Endpoint.Power : Endpoint.Pin(uid, flowOut);
     }
 
     private static string RequireOperand(LadElement e) =>

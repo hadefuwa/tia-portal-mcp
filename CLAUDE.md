@@ -177,7 +177,7 @@ Generated and temp XML files go to `C:\Temp\TiaExports` (configurable in `appset
 
 `LadXmlBuilder` (`Utilities/`) turns a structured rung into SimaticML `FlgNet`. The model never writes UIds or wires. Reference exports live in `docs/lad-samples/`; tests are in `tests/LadXmlBuilder.Tests` (`dotnet test`, XML only, no TIA).
 
-Supported: NO/NC contact, coil / set (`scoil`) / reset (`rcoil`), compare (`eq ne gt ge lt le`, `dataType` default Int), edge (`pbox`/`nbox`, operand = edge-memory Bool), timers `ton`/`tof`/`tp`, parallel `branch`, `move` (must be the last element, no outputs after it), and `call` of an FB (instance DB or `#multi`) or FC with named `parameters`. Blocks: FB, FC, OB. Not built yet: arithmetic (Add etc.), counters, Sr/Rs, system-function calls. Add them from a real export, not from memory.
+Supported: NO/NC contact, coil / set (`scoil`) / reset (`rcoil`), compare (`eq ne gt ge lt le`, `dataType` default Int), edge (`pbox`/`nbox`, operand = edge-memory Bool), timers `ton`/`tof`/`tp`, counters `ctu`/`ctd`, flip-flops `sr`/`rs`, parallel `branch`, arithmetic `add`/`mul` (2+ `operands`) and `sub`/`div`/`mod` (exactly 2), `norm_x`/`scale_x`, `move`, `call` of an FB (instance DB or `#multi`) or FC with named `parameters`, and a generic `part` for system functions such as `WR_SYS_T`. `move`, arithmetic and an eno-less `part` are DisabledENO boxes: they must be the last element and the network can have no outputs. `sr`/`rs`/`ctu`/`ctd` take a second power path in `other`. Blocks: FB, FC, OB. Add anything else from a real export, not from memory.
 
 **Confirmed from real V20 exports** (these are what the builder copies):
 - FlgNet namespace is `.../NetworkSource/FlgNet/v5` in V20.
@@ -194,6 +194,7 @@ Supported: NO/NC contact, coil / set (`scoil`) / reset (`rcoil`), compare (`eq n
 - A block referencing tags that do not exist **imports**, then fails compile with `Tag "X" not defined.` The error text is in nested compiler messages (`CompileBlockAsync` now flattens them).
 - Compare `Eq/Ne/Gt/Ge/Lt/Le` (pins `pre`, `in1`, `in2`, `out`; `SrcType` template), `PBox`/`NBox` (pins `in`, `bit`, `out`), `Move` (`DisabledENO="true"`, pins `en`, `in`, `out1`; no `eno`), and `TOF`/`TP` (same pins and `time_type` as `TON`) all import and compile. Goldens `09`.
 - `Call` of an FC with params, an FB with an instance DB, and an FB multi-instance (`#Sub`), plus a param-less call: all compile. `CallInfo` holds `Instance` then `Parameter` elements; output params are wired `NameCon -> IdentCon`. Goldens `10`-`13`. TIA fills in the callee's parameter list on import and re-exports unwired `eno`/outputs as `OpenCon`, so tests compare only the wires the builder writes.
+- Arithmetic: `Add`/`Mul` are `DisabledENO` with `Card=N` + `<AutomaticTyped Name="SrcType" />` (pins `en`, `in1..N`, `out`); `Sub`/`Div`/`Mod` the same without `Card`. `Normalize`/`Scale_X`: `SrcType`+`DestType` templates, pins `en`, `eno`, `min`, `value`, `max`, `out`. `Sr` pins `s`, `r1`, `operand`, `q`; `Rs` pins `r`, `s1`, `operand`, `q`. `CTU`/`CTD` (member types `CTU_INT`/`CTD_INT`): pins `CU`/`CD`, `R`/`LD`, `PV`, `Q`, `CV` (open). TIA tolerated `QU`/`QD` for CTU/CTD on import but re-exports `Q`, so the builder emits `Q`. System function `WR_SYS_T` as a generic `Part` (`Version`, `date_type` template, pins `en`, `IN`, `RET_VAL`) compiles. Goldens `14`-`22`.
 - Round-trip: re-importing unchanged exports of an FB, an FC and an FB with timers under new names (`Name` replaced, `Number` removed, `AutoNumber` true) imports and compiles cleanly.
 - TIA renumbers UIds on re-export, so goldens compare wiring topology, not text.
 
@@ -206,7 +207,7 @@ Supported: NO/NC contact, coil / set (`scoil`) / reset (`rcoil`), compare (`eq n
 **Still NOT verified:**
 - Timer with a non-`#` instance name (`Scope="GlobalVariable"`): it imports but compile fails with `Missing instance DB`, because the DB does not exist. An IEC timer DB cannot be created via `InstanceDB` with `InstanceOfName` `TON`/`TON_TIME` (`Block does not exist`). Needs a real export of a hand-made one (drop a TON in LAD with "single instance") before the builder or `create_instance_db` can support it.
 - Call parameter section `InOut` (emitted like an input; not exercised live). Call parameters need an explicit `datatype`; the builder does not look the callee up.
-- Arithmetic, counters, Sr/Rs and system-function calls are not built yet.
+- CTUD (up/down counter), `Rs`/`Sr` with more than one set/reset input, and arithmetic on mixed types are not built. The generic `part` with `eno:true` (power flow continuing from a system function) is not exercised live. Other system functions (WWW, CTRL_PWM, ...) work only if their pin names are copied from a real export.
 - Only checked on an S7-1200; S7-1500 may differ.
 
 **Workflow:** `create_lad_block` refuses to replace an existing block unless `overwrite:true`, runs a pre-flight check (unique UIds, wire endpoints resolve, no input pin driven twice, XML well-formed) before touching TIA, and returns the compile output. Compiling is not correctness: have the user review the logic.
