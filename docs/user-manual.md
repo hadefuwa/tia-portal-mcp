@@ -52,7 +52,7 @@ Click **Run Tool** in the sidebar (or any tool name in the Tools section) to ope
 |----------|-------|
 | Connection | connect_to_tia_portal, get_status |
 | Hardware | list_devices |
-| Blocks | list_blocks, read_block, write_block_scl, import_block_xml, compile_block, analyze_block, create_block, create_instance_db |
+| Blocks | list_blocks, read_block, write_block_scl, import_block_xml, compile_block, analyze_block, create_block, create_lad_block, create_instance_db |
 | Tags | list_tag_tables, get_tags, import_tag_table, batch_rename_tags |
 | Analysis | analyze_scl |
 | Project | save_project, clone_project, get_option_packages, get_project_signature |
@@ -156,6 +156,9 @@ Runs static SCL analysis on a block without compiling it. Checks for common issu
 **create_block** · `device`, `name`, `type`, `sourceCode`, `[number]`
 Creates a new block (FB, FC, OB, or GlobalDB) from SCL source. Generates a SimaticML XML skeleton, imports it, and returns the new block info. Block type must be one of: `FB`, `FC`, `OB`, `GlobalDB`.
 
+**create_lad_block** · `device`, `name`, `type`, `networks`, `[interface]`, `[number]`, `[culture]`, `[overwrite]`, `[dryRun]`
+Creates a LAD block (FB, FC or OB) from a structured description — you never write XML. Each network is series logic (`contact`, `ton`, parallel `branch`) ending in coils (`coil`, `scoil`, `rcoil`). Operands can be tags, `"DB".Member` or `#local` interface variables. The block is imported and compiled, and the compiler output is returned; always review the logic, because compiling doesn't prove it behaves correctly. An existing block is only replaced with `overwrite: true`. OBs are auto-numbered from 123. `dryRun: true` validates and shows the XML without touching TIA Portal. The PLC must be offline.
+
 **create_instance_db** · `device`, `name`, `instanceOfName`, `[number]`
 Creates a new Instance DB linked to an FB. Generates the SimaticML XML with the correct `InstanceOfName` attribute and imports it. If `number` is omitted, TIA Portal assigns one automatically.
 
@@ -216,6 +219,7 @@ Returns a complete index of the entire project: every device, every block (name,
 |---------|-----|
 | "Security error — not a member of Siemens TIA Openness group" | Add your Windows account to the `Siemens TIA Openness` local group (Computer Management → Local Users and Groups → Groups) and sign out/in |
 | "No running TIA Portal process found" | TIA Portal must be open with a project loaded before clicking Connect |
+| "This function is not supported in online mode" when creating or importing a block | The PLC is online. Go offline in TIA Portal (Online → Go offline) and retry |
 | "Inconsistent blocks cannot be exported" | Press Ctrl+B in TIA Portal to compile everything, then retry |
 | My changes don't appear after restarting the app | The app bat file runs `bin\Release\net48\TiaPortalDashboard.exe` — rebuild with `dotnet build -c Release` or the dashboard will run old code |
 | Claude says "Unknown tool" | Restart Claude Desktop after editing the MCP config — it only loads tools at startup |

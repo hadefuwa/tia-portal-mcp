@@ -126,7 +126,8 @@ tool also disables it. Default is `full`.
 | `compile_block` | `device`, `block` | — | `{result:"…"}` — multi-line text with state, error/warning counts, messages |
 | `analyze_block` | `device`, `block` | — | SCL analysis result (see below) |
 | `create_block` | `device`, `name`, `type`, `sourceCode` | `number` | Created block info |
-| `create_instance_db` | `device`, `name`, `instanceOfName` | `number` | Created block info |
+| `create_lad_block` | `device`, `name`, `type` (FB/FC/OB), `networks` | `interface`, `number`, `culture`, `overwrite`, `compile`, `dryRun` | `{name, imported, compileSucceeded, compileOutput, xmlPath}` — builds LAD from structured rungs, no XML written by the caller. See CLAUDE.md "LAD generation" |
+| `create_instance_db` | `device`, `name`, `instanceOfName` | `number` | Created block info (FB instance DBs only; IEC timer DBs are not supported) |
 | `list_tag_tables` | `device` | — | Array of `{name, tagCount, comment}` |
 | `get_tags` | `device`, `table` | — | Array of `{name, dataType, address, accessible, writable, comment}` |
 | `import_tag_table` | `device`, `content` | — | `{success:true}` |
@@ -176,7 +177,12 @@ before you suspect your arguments.
 - **`close_project` and `generate_s7_1200` require `confirm: true`.** They throw a message telling the
   model to check with the user first.
 - **`create_block` always creates SCL.** `type` selects FB / FC / OB / GlobalDB, but the language is
-  hardcoded — there is no way to create a LAD/FBD/STL block through it. Use `import_block_xml` for those.
+  hardcoded. For LAD use `create_lad_block`; for FBD/STL use `import_block_xml`.
+- **`create_lad_block` limits (verified live on V20 / S7-1200):** supports contact (NC), coil/set/reset, `TON`
+  and parallel branches. An OB is auto-numbered from 123 up and takes only input/temp/constant members.
+  A `TON` needs a `#local` instance declared in Static (type `TON`); a global timer DB is not supported yet.
+  Tags that don't exist still import but fail compile; the compiler text is returned. The PLC must be
+  **offline** — Openness refuses to create blocks in online mode.
 - **Every tool except `connect_to_tia_portal` and `get_status` calls `EnsureConnected()`** and throws
   if you haven't connected yet.
 - Tool errors come back as `isError: true` with the first line of the exception as text, not as a
