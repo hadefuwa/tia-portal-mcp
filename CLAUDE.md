@@ -244,24 +244,31 @@ var table = sw.TagTables["Default tag table"];  // CS1503
 var table = sw.TagTables.Find("Default tag table");
 ```
 
-### Creating tags — partial support only
+### Creating tags and linking them to PLC tags — SOLVED (live-tested on V20)
 
 ```csharp
-// Create() with ONE parameter — works:
-var tag = table.Tags.Create(tagName);
+var tag = table.Tags.Create(tagName);          // works; the new tag is Connection "<Internal tag>"
+tag.SetAttribute("DataType", "Bool");          // works (a PLC link overrides it, see below)
 
-// Create() with TWO parameters — throws "Tag table not found":
-var tag = table.Tags.Create(tagName, dataType);  // DO NOT USE
+// WRONG ORDER — throws "The controller tag DI_A_0 was not found." (this is the old "controller tag not found"):
+tag.SetAttribute("PlcTag", "DI_A_0");
 
-// SetAttribute("DataType", ...) — works after Create():
-tag.SetAttribute("DataType", "Bool");
-
-// SetAttribute("PlcTag", ...) — throws for newly created tags via API:
-tag.SetAttribute("PlcTag", "DI_A_0");  // "controller tag not found"
-// The tag IS created successfully as an Internal tag (Connection = "<Internal tag>").
-// The PlcTag link must be set manually in TIA Portal UI after the tag exists.
-// Workaround: omit PlcTag from Create calls; user links tags to PLC in TIA Portal UI.
+// CORRECT: set the Connection FIRST, then PlcTag:
+tag.SetAttribute("Connection", "HMI_Connection_6");
+tag.SetAttribute("PlcTag", "DI_A_0");          // linked; DataType now follows the PLC tag (Int for IO.Worksheet_Selector)
 ```
+
+The link is `Connection` (an existing HMI connection name) plus `PlcTag`. `create_hmi_tags` does this when a tag has `"bindPlc": true` (off by default; without it tags stay Internal, as before). If the link fails the tag is put back to `<Internal tag>` and returned as `created_unlinked` with the TIA error.
+
+Other findings:
+- `Tags.Create(name, X)`: the second parameter is a **table name**, not a data type. That is why the old `Create(tagName, dataType)` threw "Tag table not found".
+- `Connection` is the attribute name. `ConnectionName` does not exist on `HmiTag` (`ReadTag` now reads `Connection`).
+- TIA does **not** validate the Connection name: `SetAttribute("Connection", "No_Such_Connection")` succeeds and reads back. Only the following `PlcTag` set fails, so the tag must be reverted on failure.
+- Invalid PLC tag: `The controller tag No_Such_DB.Nope was not found.`
+- `Address` exists but cannot be written: on an Internal tag `Set is not allowed for disabled fields`; on a connected tag without a PLC tag `Controller tag is not defined in tag X`. The absolute-address route (`%M0.0`) does not work. `LogicalAddress` and `AddressAccessMode` do not exist on `HmiTag`.
+- Other readable attributes: `AcquisitionMode` (`CyclicOnUse`), `AcquisitionCycle` (`T1s`; `T100ms` on an existing tag), `LinearScaling`, `Address`. `Comment`, `Persistency`, `Quality`, `ArrayElements` are not supported on `HmiTag`.
+- `Tags` (`HmiTagComposition`) has `Export(DirectoryInfo[, name])` and `Import(DirectoryInfo[, name])`; `HmiTagTable` itself has no export/import. The import route was not needed once the link worked, so it was not tried.
+- **DANGER: do not call `GetAttributeInfos()` on an `HmiTag`.** It threw `Property : ConfirmationType not found` and TIA Portal then crashed. Read named attributes one at a time instead.
 
 ### WinCC Unified forcing faceplate — struct tag requirement
 

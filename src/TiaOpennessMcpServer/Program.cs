@@ -990,17 +990,18 @@ List<object> McpToolDefs() => new()
     McpT("get_all_hmi_tags", "Returns every HMI tag on the device as a flat list — name, table, data type, and linked PLC tag.",
         McpP("device", "string", true, "HMI device name")),
     McpT("create_hmi_tags",
-        "Creates tags in a WinCC Unified HMI tag table. IMPORTANT: Openness can only create these as "
-      + "Internal tags — setting the PlcTag attribute throws for newly created tags, so the tags will "
-      + "have no PLC connection. Always tell the user they must open TIA Portal → HMI tags and set the "
-      + "Connection and PLC tag by hand afterwards, or the tags will not read anything.",
+        "Creates tags in a WinCC Unified HMI tag table. By default the tags are created as Internal tags with no PLC link. "
+      + "Set bindPlc:true on a tag (with plcTag and connection) to link it to a PLC tag: Connection is set first, then PlcTag, "
+      + "and the data type follows the PLC tag. If the link fails the tag is left Internal and reported as created_unlinked "
+      + "with the TIA error. An unknown connection name is not checked by TIA, so verify the result.",
         McpP("device", "string", true, "HMI device name"),
         McpP("table",  "string", true, "Target HMI tag table"),
         McpPArr("tags", true, "Tags to create",
             McpP("name",       "string", true,  "HMI tag name"),
             McpP("dataType",   "string", true,  "HMI data type, e.g. Bool, Int, Real"),
-            McpP("plcTag",     "string", false, "Intended PLC tag — recorded only; not applied (see above)"),
-            McpP("connection", "string", false, "Intended HMI connection name — recorded only; not applied"))),
+            McpP("plcTag",     "string", false, "PLC tag to link, e.g. \"IO.Motor\". Only applied when bindPlc is true"),
+            McpP("connection", "string", false, "HMI connection name (default HMI_Connection_6). Only applied when bindPlc is true"),
+            McpP("bindPlc",    "boolean", false, "Opt-in, default false. true = link the new tag to plcTag over connection (sets Connection, then PlcTag; the data type follows the PLC tag). If the link fails the tag is left Internal and reported as created_unlinked"))),
     McpT("list_hmi_screens", "Lists the screens on a WinCC Unified HMI device.",
         McpP("device", "string", true, "HMI device name")),
     McpT("get_screen_tag_refs", "Returns every tag referenced by an HMI screen and the screen item referencing it. Read-only.",

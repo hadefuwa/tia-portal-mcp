@@ -44,7 +44,7 @@ Both modes talk to the same REST server and the same TIA Portal connection.
 | **Generate an S7-1200** | Build a new station from a CPU variant, signal modules, and a PROFINET address |
 | **HMI tag tables** | List WinCC Unified tag tables and tag counts for any HMI device |
 | **HMI tag export** | Export all HMI tags with PLC connections, data types, and table assignments |
-| **HMI tag creation** | Create HMI tags in bulk (Internal only — the PLC link must be set by hand) |
+| **HMI tag creation** | Create HMI tags in bulk. Internal by default; per tag set `bindPlc: true` with `plcTag` and `connection` to link it to a PLC tag |
 | **HMI screens** | List screens and every tag each screen references |
 | **Faceplate parameters** | Repoint a faceplate instance's interface parameters at different tags |
 | **Project signature** | Full index of every block and tag table across all devices |
@@ -342,7 +342,7 @@ curl -X POST http://localhost:5000/api/devices/HMI/hmi/tags/Default%20tag%20tabl
   -d '[{"name":"DI_A_0","dataType":"Bool"},{"name":"DQ_A_0","dataType":"Bool"}]'
 ```
 
-> **WinCC Unified limitation:** The create endpoint creates tags as *Internal tags* (no PLC connection). The `SetAttribute("PlcTag", ...)` call in the Openness API throws for newly created tags regardless of format. After creating tags via the API, open TIA Portal → HMI tags and manually set the Connection and PLC tag for each one.
+> **WinCC Unified:** tags are created as *Internal tags* by default. Set `bindPlc: true` on a tag (with `plcTag` and `connection`) to link it: the API sets `Connection` first, then `PlcTag`, and the data type follows the PLC tag. If the link fails the tag stays Internal and is returned as `created_unlinked` with the TIA error. TIA does not validate the connection name, so check the result.
 
 ### REST API — Block text patching
 

@@ -43,6 +43,8 @@ public sealed record HmiTagCreateRequest
     public required string DataType { get; init; }
     public          string PlcTag   { get; init; } = "";
     public          string Connection { get; init; } = "HMI_Connection_6";
+    /// <summary>Opt-in: link the new tag to <see cref="PlcTag"/> over <see cref="Connection"/>. Default false.</summary>
+    public          bool   BindPlc  { get; init; }
 }
 
 public sealed record FaceplateTagUpdate

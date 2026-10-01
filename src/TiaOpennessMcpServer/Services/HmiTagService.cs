@@ -80,23 +80,38 @@ public sealed class HmiTagService
                         results.Add(new { name = req.Name, status = "skipped", reason = "already exists" });
                         continue;
                     }
-                    // Tag exists but has no PLC link — patch DataType and PlcTag
+                    // Tag exists but has no PLC link: patch DataType and, only when bindPlc, the link
                     if (!string.IsNullOrEmpty(req.DataType))
                         existing.SetAttribute("DataType", req.DataType);
-                    if (!string.IsNullOrEmpty(req.PlcTag))
-                        existing.SetAttribute("PlcTag", req.PlcTag);
-                    results.Add(new { name = req.Name, status = "updated", plcTag = req.PlcTag });
+                    if (req.BindPlc && !string.IsNullOrEmpty(req.PlcTag))
+                    {
+                        var err = TryBindPlcTag(existing, req.Connection, req.PlcTag);
+                        results.Add(err is null
+                            ? new { name = req.Name, status = "updated", plcTag = req.PlcTag, error = (string?)null }
+                            : new { name = req.Name, status = "updated_unlinked", plcTag = "", error = (string?)err });
+                        continue;
+                    }
+                    results.Add(new { name = req.Name, status = "updated", plcTag = "", error = (string?)null });
                     continue;
                 }
 
                 var tag = table.Tags.Create(req.Name);
                 tag.SetAttribute("DataType", req.DataType);
-                if (!string.IsNullOrEmpty(req.PlcTag))
-                    tag.SetAttribute("PlcTag", req.PlcTag);
 
-                _log.LogInformation("Created HMI tag '{Name}' → '{PlcTag}' in table '{Table}'.",
-                    req.Name, req.PlcTag, tableName);
-                results.Add(new { name = req.Name, status = "created", plcTag = req.PlcTag });
+                // The PLC link is opt-in (bindPlc). Without it the tag stays Internal, as before.
+                if (req.BindPlc && !string.IsNullOrEmpty(req.PlcTag))
+                {
+                    var err = TryBindPlcTag(tag, req.Connection, req.PlcTag);
+                    _log.LogInformation("Created HMI tag '{Name}' in '{Table}', bind to '{PlcTag}': {Result}.",
+                        req.Name, tableName, req.PlcTag, err ?? "linked");
+                    results.Add(err is null
+                        ? new { name = req.Name, status = "created", plcTag = req.PlcTag, error = (string?)null }
+                        : new { name = req.Name, status = "created_unlinked", plcTag = "", error = (string?)err });
+                    continue;
+                }
+
+                _log.LogInformation("Created HMI tag '{Name}' (internal) in table '{Table}'.", req.Name, tableName);
+                results.Add(new { name = req.Name, status = "created", plcTag = "", error = (string?)null });
             }
             return (object)results;
         });
@@ -159,7 +174,7 @@ public sealed class HmiTagService
     private static object ReadTag(HmiTag tag, string? tableName = null)
     {
         string plcTag     = SafeAttr(tag, "PlcTag");
-        string connection = SafeAttr(tag, "ConnectionName");
+        string connection = SafeAttr(tag, "Connection"); // "ConnectionName" does not exist on HmiTag
         string dataType   = SafeAttr(tag, "DataType");
         string comment    = SafeAttr(tag, "Comment");
 
@@ -172,6 +187,27 @@ public sealed class HmiTagService
             comment,
         };
         return obj;
+    }
+
+    /// <summary>
+    /// Links an HMI tag to a PLC tag. Live-verified order: the Connection must be set BEFORE PlcTag, otherwise
+    /// PlcTag throws "controller tag ... was not found" (a new tag starts as "&lt;Internal tag&gt;"). The tag's
+    /// DataType then follows the PLC tag. TIA accepts any Connection name without checking it, so on failure the
+    /// tag is put back to Internal. Returns null on success, else the error text.
+    /// </summary>
+    private static string? TryBindPlcTag(HmiTag tag, string connection, string plcTag)
+    {
+        try
+        {
+            tag.SetAttribute("Connection", connection);
+            tag.SetAttribute("PlcTag", plcTag);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            try { tag.SetAttribute("Connection", "<Internal tag>"); } catch { /* best effort */ }
+            return ex.Message.Replace("\r", "").Replace("\n", " ").Trim();
+        }
     }
 
     private static string SafeAttr(HmiTag tag, string attr)

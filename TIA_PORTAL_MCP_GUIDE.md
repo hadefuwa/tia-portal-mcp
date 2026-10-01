@@ -141,7 +141,7 @@ tool also disables it. Default is `full`.
 | `list_hmi_tag_tables` | `device` | — | WinCC Unified tag tables with counts |
 | `get_hmi_tags` | `device`, `table` | — | Tags in one HMI tag table |
 | `get_all_hmi_tags` | `device` | — | Every HMI tag, flat, with table + linked PLC tag |
-| `create_hmi_tags` | `device`, `table`, `tags` | — | Created tags ⚠ Internal only — see below |
+| `create_hmi_tags` | `device`, `table`, `tags` | per tag: `plcTag`, `connection`, `bindPlc` | Created tags; Internal unless `bindPlc:true`, see below |
 | `list_hmi_screens` | `device` | — | Screens on the HMI device |
 | `get_screen_tag_refs` | `device`, `screen` | — | Tags referenced by a screen and the item referencing each |
 | `update_faceplate_tags` | `device`, `screen`, `updates` | — | Per-update result — `updates` is `[{containerName, parameterName, newValue}]` |
@@ -169,11 +169,10 @@ before you suspect your arguments.
   cannot choose between them — close the ones you don't want.
 - **`number` is declared as an `integer`** on `create_block` and `create_instance_db`. Either `5` or
   `"5"` is accepted — the `AIN()` accessor coerces both. Anything unparseable becomes auto-number.
-- ⚠ **`create_hmi_tags` cannot link tags to the PLC.** Openness throws on `SetAttribute("PlcTag", …)`
-  for newly created WinCC Unified tags, so they are always created as *Internal* tags. The `plcTag` and
-  `connection` arguments are accepted but not applied. Someone must set the Connection and PLC tag by
-  hand in TIA Portal afterwards, or the tags read nothing. This is stated in the tool description so
-  Claude relays it rather than silently producing dead tags.
+- **`create_hmi_tags` links to the PLC only with `bindPlc: true`** (verified live). Openness needs the
+  `Connection` set before `PlcTag`; the tool does both, and the data type then follows the PLC tag. Without
+  `bindPlc` the tags are created *Internal* and `plcTag`/`connection` are ignored. A failed link leaves the tag
+  Internal and is reported as `created_unlinked` with the TIA error. TIA does not check the connection name.
 - **`close_project` and `generate_s7_1200` require `confirm: true`.** They throw a message telling the
   model to check with the user first.
 - **`create_block` always creates SCL.** `type` selects FB / FC / OB / GlobalDB, but the language is
