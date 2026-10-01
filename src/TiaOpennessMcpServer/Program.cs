@@ -75,8 +75,40 @@ var standardTools = new HashSet<string>(liteTools, StringComparer.OrdinalIgnoreC
     "list_hmi_screens", "get_screen_tag_refs", "update_faceplate_tags",
 };
 
+// readonly = look, never edit. Opt-in (--profile readonly); the default profile
+// is unchanged. compile_block and connect_to_tia_portal are included because
+// neither alters project content.
+var readonlyTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "connect_to_tia_portal", "get_status", "list_devices", "list_blocks",
+    "read_block", "compile_block", "analyze_block", "analyze_scl",
+    "list_tag_tables", "get_tags", "get_device", "get_io_mapping",
+    "get_project_signature", "get_block_attributes", "get_option_packages",
+    "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags",
+    "list_hmi_screens", "get_screen_tag_refs",
+};
+
+// Tools that only read the project. Used for the MCP readOnlyHint annotation.
+var readOnlyHintTools = new HashSet<string>(readonlyTools, StringComparer.OrdinalIgnoreCase);
+readOnlyHintTools.ExceptWith(new[] { "connect_to_tia_portal", "compile_block" });
+readOnlyHintTools.UnionWith(new[] { "export_block", "export_tag_table" }); // write files, not the project
+
+// Tools that overwrite existing project content. Used for destructiveHint.
+var destructiveHintTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "write_block_scl", "import_block_xml", "import_tag_table", "patch_block_texts",
+    "batch_rename_tags", "update_faceplate_tags", "close_project",
+};
+
+// --annotations (or TIA_MCP_ANNOTATIONS=1) adds MCP tool annotations to
+// tools/list so clients can prompt only on writes. Off by default: the
+// advertised tool definitions are byte-for-byte what they were before.
+bool mcpAnnotations = Array.IndexOf(args, "--annotations") >= 0
+                      || Environment.GetEnvironmentVariable("TIA_MCP_ANNOTATIONS") == "1";
+
 bool InProfile(string tool) =>
-    mcpProfile == "lite"     ? liteTools.Contains(tool)
+    mcpProfile == "readonly" ? readonlyTools.Contains(tool)
+  : mcpProfile == "lite"     ? liteTools.Contains(tool)
   : mcpProfile == "standard" ? standardTools.Contains(tool)
   : true;
 
@@ -824,8 +856,29 @@ async Task<object?> McpDispatch(JsonElement p)
 }
 
 // The tool surface actually advertised, after --profile / TIA_MCP_PROFILE.
-List<object> McpToolDefsForProfile() =>
-    McpToolDefs().Where(d => InProfile(McpToolName(d))).ToList();
+List<object> McpToolDefsForProfile()
+{
+    var defs = McpToolDefs().Where(d => InProfile(McpToolName(d)));
+    return (mcpAnnotations ? defs.Select(AddAnnotations) : defs).ToList();
+}
+
+// Rebuilds a definition with an "annotations" block. Only reached when
+// annotations are switched on.
+object AddAnnotations(object def)
+{
+    var t = def.GetType();
+    string name = McpToolName(def);
+    bool ro = readOnlyHintTools.Contains(name);
+    return new {
+        name,
+        description = t.GetProperty("description")?.GetValue(def),
+        inputSchema = t.GetProperty("inputSchema")?.GetValue(def),
+        annotations = new {
+            readOnlyHint    = ro,
+            destructiveHint = !ro && destructiveHintTools.Contains(name),
+        }
+    };
+}
 
 // Definitions are anonymous types; read the name back off the one property we
 // need rather than restructuring every McpT call site around a named type.
