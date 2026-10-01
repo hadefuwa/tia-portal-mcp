@@ -24,12 +24,19 @@ public class LiveGoldenTests
 
     private static LadElement Contact(string op, bool nc = false) => new() { Type = "contact", Operand = op, Negated = nc };
 
-    private static List<string> Edges(XElement flg)
+    internal static List<string> Edges(XElement flg)
     {
         var label = new Dictionary<string, string>();
         foreach (var p in flg.Element(Ns + "Parts")!.Elements())
         {
             var uid = p.Attribute("UId")!.Value;
+            if (p.Name.LocalName == "Call")
+            {
+                var ci = p.Element(Ns + "CallInfo")!;
+                label[uid] = "Call:" + ci.Attribute("Name")!.Value + ci.Elements(Ns + "Instance").Select(i =>
+                    "@" + i.Attribute("Scope")!.Value + ":" + i.Element(Ns + "Component")!.Attribute("Name")!.Value).FirstOrDefault();
+                continue;
+            }
             label[uid] = p.Name.LocalName == "Access"
                 ? "Access:" + p.Attribute("Scope")!.Value + ":" +
                   string.Join(".", p.Descendants(Ns + "Component").Select(c => c.Attribute("Name")!.Value)) +
@@ -37,7 +44,9 @@ public class LiveGoldenTests
                 : p.Name.LocalName == "Part" && p.Element(Ns + "Instance") is { } inst
                     ? p.Attribute("Name")!.Value + "@" + inst.Attribute("Scope")!.Value + ":" +
                       string.Join(".", inst.Descendants(Ns + "Component").Select(c => c.Attribute("Name")!.Value))
-                    : p.Attribute("Name")?.Value ?? p.Name.LocalName;
+                    : (p.Attribute("Name")?.Value ?? p.Name.LocalName) +
+                      string.Concat(p.Elements(Ns + "TemplateValue").Select(t => $"({t.Attribute("Name")!.Value}={t.Value})")) +
+                      (p.Element(Ns + "Negated") is null ? "" : "(NC)");
         }
         var edges = new List<string>();
         foreach (var w in flg.Element(Ns + "Wires")!.Elements())

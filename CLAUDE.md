@@ -177,7 +177,7 @@ Generated and temp XML files go to `C:\Temp\TiaExports` (configurable in `appset
 
 `LadXmlBuilder` (`Utilities/`) turns a structured rung into SimaticML `FlgNet`. The model never writes UIds or wires. Reference exports live in `docs/lad-samples/`; tests are in `tests/LadXmlBuilder.Tests` (`dotnet test`, XML only, no TIA).
 
-Supported: NO/NC contact, coil / set (`scoil`) / reset (`rcoil`), `TON`, parallel `branch`. Blocks: FB, FC, OB. Anything else (compare, edge, TOF, block call) is not built yet — add it from a real export, not from memory.
+Supported: NO/NC contact, coil / set (`scoil`) / reset (`rcoil`), compare (`eq ne gt ge lt le`, `dataType` default Int), edge (`pbox`/`nbox`, operand = edge-memory Bool), timers `ton`/`tof`/`tp`, parallel `branch`, `move` (must be the last element, no outputs after it), and `call` of an FB (instance DB or `#multi`) or FC with named `parameters`. Blocks: FB, FC, OB. Not built yet: arithmetic (Add etc.), counters, Sr/Rs, system-function calls. Add them from a real export, not from memory.
 
 **Confirmed from real V20 exports** (these are what the builder copies):
 - FlgNet namespace is `.../NetworkSource/FlgNet/v5` in V20.
@@ -192,6 +192,8 @@ Supported: NO/NC contact, coil / set (`scoil`) / reset (`rcoil`), `TON`, paralle
 - Seal-in FB (branch + NC contact + coil, `#local` operands); FC (`Ret_Val`/`Void` is kept by TIA); OB (`SecondaryType` `ProgramCycle`).
 - `TON` with `#Tmr` declared in Static as `TON`: plain `Instance Scope="LocalVariable"` component. TIA re-exports the member as `TON_TIME`.
 - A block referencing tags that do not exist **imports**, then fails compile with `Tag "X" not defined.` The error text is in nested compiler messages (`CompileBlockAsync` now flattens them).
+- Compare `Eq/Ne/Gt/Ge/Lt/Le` (pins `pre`, `in1`, `in2`, `out`; `SrcType` template), `PBox`/`NBox` (pins `in`, `bit`, `out`), `Move` (`DisabledENO="true"`, pins `en`, `in`, `out1`; no `eno`), and `TOF`/`TP` (same pins and `time_type` as `TON`) all import and compile. Goldens `09`.
+- `Call` of an FC with params, an FB with an instance DB, and an FB multi-instance (`#Sub`), plus a param-less call: all compile. `CallInfo` holds `Instance` then `Parameter` elements; output params are wired `NameCon -> IdentCon`. Goldens `10`-`13`. TIA fills in the callee's parameter list on import and re-exports unwired `eno`/outputs as `OpenCon`, so tests compare only the wires the builder writes.
 - Round-trip: re-importing unchanged exports of an FB, an FC and an FB with timers under new names (`Name` replaced, `Number` removed, `AutoNumber` true) imports and compiles cleanly.
 - TIA renumbers UIds on re-export, so goldens compare wiring topology, not text.
 
@@ -203,7 +205,8 @@ Supported: NO/NC contact, coil / set (`scoil`) / reset (`rcoil`), `TON`, paralle
 
 **Still NOT verified:**
 - Timer with a non-`#` instance name (`Scope="GlobalVariable"`): it imports but compile fails with `Missing instance DB`, because the DB does not exist. An IEC timer DB cannot be created via `InstanceDB` with `InstanceOfName` `TON`/`TON_TIME` (`Block does not exist`). Needs a real export of a hand-made one (drop a TON in LAD with "single instance") before the builder or `create_instance_db` can support it.
-- TOF/TP, compare, edge and block-call elements are still not built.
+- Call parameter section `InOut` (emitted like an input; not exercised live). Call parameters need an explicit `datatype`; the builder does not look the callee up.
+- Arithmetic, counters, Sr/Rs and system-function calls are not built yet.
 - Only checked on an S7-1200; S7-1500 may differ.
 
 **Workflow:** `create_lad_block` refuses to replace an existing block unless `overwrite:true`, runs a pre-flight check (unique UIds, wire endpoints resolve, no input pin driven twice, XML well-formed) before touching TIA, and returns the compile output. Compiling is not correctness: have the user review the logic.

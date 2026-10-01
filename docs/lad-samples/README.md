@@ -14,6 +14,11 @@ from them without a new export proving the alternative imports cleanly.
 | 06-live-ton-multiinstance-fb.xml | Same for `TON` with `#Tmr` static instance (`TON_TIME`) |
 | 07-live-contact-coil-fc.xml | Same for an FC (`Return` section, `Ret_Val` `Void`) |
 | 08-live-contact-coil-ob.xml | Same for a ProgramCycle OB (only Input/Temp/Constant, explicit `Number`) |
+| 09-live-compare-edge-move-tof-tp-fb.xml | `Gt/Eq/Ne/Ge/Le/Lt` (`SrcType`), `PBox`/`NBox` (`bit`), `Move` (`DisabledENO`), `TOF`, `TP` |
+| 10-live-call-fc-with-params.xml | `Call` of an FC; input `IdentCon -> NameCon`, output `NameCon -> IdentCon` |
+| 11-live-call-fb-instance-db.xml | `Call` of an FB with `Instance Scope="GlobalVariable"` |
+| 12-live-call-fb-multi-instance.xml | `Call` of an FB with `Instance Scope="LocalVariable"` (multi-instance) |
+| 13-live-call-no-params-ob.xml | Param-less FB call in an OB; TIA adds the parameter list and `OpenCon` for eno/outputs |
 
 Format facts confirmed here:
 - `FlgNet` namespace is `.../NetworkSource/FlgNet/v5` in V20.

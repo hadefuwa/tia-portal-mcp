@@ -31,7 +31,7 @@ Both modes talk to the same REST server and the same TIA Portal connection.
 | **Compile blocks** | Trigger compilation and see the result inline |
 | **Analyse SCL** | Scan SCL code for issues (unbalanced blocks, nested IFs, etc.) |
 | **Create blocks** | Generate new FB, FC, OB, or GlobalDB from SCL source |
-| **Create LAD blocks** | Build an FB, FC or OB from a structured rung description (contacts, coils, set/reset, TON, parallel branches); imported and compiled for you, compiler output returned. Verified on TIA V20 / S7-1200 |
+| **Create LAD blocks** | Build an FB, FC or OB from a structured rung description (contacts, coils, set/reset, compares, edge detection, TON/TOF/TP, parallel branches, move, FB/FC calls); imported and compiled for you, compiler output returned. Verified on TIA V20 / S7-1200 |
 | **Create instance DBs** | Create a new Instance DB linked to any FB |
 | **Patch block texts** | Update a block's title, comment, and per-network titles without touching logic |
 | **Block attribute inspector** | List all readable/writable attributes and compositions on any block |

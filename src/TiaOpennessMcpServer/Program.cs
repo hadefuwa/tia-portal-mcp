@@ -866,7 +866,7 @@ List<object> McpToolDefs() => new()
         McpP("number",      "integer", false, "Block number — omit to let TIA Portal assign one")),
     McpT("create_lad_block",
         "Creates a LAD block from a structured rung description, imports it, and compiles it. You never write "
-      + "XML, UIds or wires. Each network is series logic in 'elements' (contact, ton, branch) ending in "
+      + "XML, UIds or wires. Each network is series logic in 'elements' (contact, eq/ne/gt/ge/lt/le, pbox/nbox, ton/tof/tp, branch, call, move) ending in "
       + "'outputs' (coil, scoil, rcoil). A seal-in is one network: elements=[branch[[contact Start],[contact Motor]], "
       + "contact Stop negated], outputs=[coil Motor]. Operands: Tag, \"DB\".Member, #localVar; ton pt like T#5s. "
       + "Always read the compile output, and ask the user to review the logic: compiling does not prove it "
@@ -1072,11 +1072,33 @@ Dictionary<string, object> LadElementProps(int depth)
 {
     var p = new Dictionary<string, object>
     {
-        ["type"]     = new { type = "string", description = "contact | ton | branch (elements); coil | scoil | rcoil (outputs)" },
-        ["operand"]  = new { type = "string", description = "contact/coil tag: Tag, \"DB\".Member or #local" },
+        ["type"]     = new { type = "string", description = "elements: contact | eq ne gt ge lt le | pbox nbox | ton tof tp | branch | call | move; outputs: coil | scoil | rcoil" },
+        ["operand"]  = new { type = "string", description = "contact/coil tag: Tag, \"DB\".Member or #local. compare: left value. pbox/nbox: the edge-memory Bool. move: destination" },
         ["negated"]  = new { type = "boolean", description = "contact only: true = normally closed" },
-        ["instance"] = new { type = "string", description = "ton only: #Tmr (FB multi-instance) or instance DB name" },
-        ["pt"]       = new { type = "string", description = "ton only: preset, e.g. T#5s" },
+        ["instance"] = new { type = "string", description = "timer: #Tmr (FB multi-instance). call of an FB: instance DB name or #multi" },
+        ["pt"]       = new { type = "string", description = "timer only: preset, e.g. T#5s" },
+        ["operand2"] = new { type = "string", description = "compare only: right-hand value" },
+        ["dataType"] = new { type = "string", description = "compare only: Int (default), DInt, Real..." },
+        ["source"]   = new { type = "string", description = "move only: value or tag to copy into 'operand'. A move must be the last element and the network can have no outputs" },
+        ["block"]    = new { type = "string", description = "call only: name of the FB/FC to call" },
+        ["blockType"] = new { type = "string", description = "call only: FB or FC" },
+        ["parameters"] = new
+        {
+            type = "array",
+            description = "call only: parameters to wire",
+            items = new
+            {
+                type = "object",
+                properties = new Dictionary<string, object>
+                {
+                    ["name"]     = new { type = "string" },
+                    ["section"]  = new { type = "string", description = "Input | Output | InOut" },
+                    ["datatype"] = new { type = "string", description = "the parameter's data type, e.g. Bool, Int, Real" },
+                    ["operand"]  = new { type = "string", description = "tag, \"DB\".Member, #local or literal" },
+                },
+                required = new[] { "name", "section", "datatype", "operand" },
+            },
+        },
     };
     if (depth > 0)
         p["branches"] = new

@@ -23,6 +23,27 @@ public sealed class LadElement
     public string? Pt       { get; set; }
     /// <summary>branch only: parallel paths, each a series of elements.</summary>
     public List<List<LadElement>>? Branches { get; set; }
+    /// <summary>compare (eq/ne/gt/ge/lt/le) only: the right-hand operand; <see cref="Operand"/> is the left.</summary>
+    public string? Operand2 { get; set; }
+    /// <summary>compare only: operand type (Int, DInt, Real, ...). Default Int.</summary>
+    public string? DataType { get; set; }
+    /// <summary>move only: value or tag to copy into <see cref="Operand"/> (the destination).</summary>
+    public string? Source { get; set; }
+    /// <summary>call only: block name, e.g. "Mixer".</summary>
+    public string? Block { get; set; }
+    /// <summary>call only: FB or FC. For an FB, <see cref="Instance"/> is its instance DB ("Mixer_DB") or "#multi".</summary>
+    public string? BlockType { get; set; }
+    /// <summary>call only: parameters to wire. Each needs name, section, datatype and operand.</summary>
+    public List<LadParam>? Parameters { get; set; }
+}
+
+public sealed class LadParam
+{
+    public string Name     { get; set; } = "";
+    /// <summary>Input, Output or InOut.</summary>
+    public string Section  { get; set; } = "Input";
+    public string Datatype { get; set; } = "Bool";
+    public string Operand  { get; set; } = "";
 }
 
 public sealed class LadNetwork
@@ -83,6 +104,9 @@ public static class LadXmlBuilder
         if (net.Outputs.Count == 0 && net.Elements.Count == 0)
             throw new ArgumentException("A network needs at least one element or output.");
 
+        if (ctx.Terminated && net.Outputs.Count > 0)
+            throw new ArgumentException("a network ending in 'move' cannot have outputs; use a separate network.");
+
         foreach (var o in net.Outputs)
         {
             var part = o.Type.ToLowerInvariant() switch
@@ -107,6 +131,8 @@ public static class LadXmlBuilder
     {
         foreach (var e in items)
         {
+            if (ctx.Terminated)
+                throw new ArgumentException($"nothing can follow a 'move' ({where}); put it last, with no outputs after it. Use a separate network.");
             switch (e.Type.ToLowerInvariant())
             {
                 case "contact":
@@ -120,16 +146,96 @@ public static class LadXmlBuilder
                     cur = Endpoint.Pin(uid, "out");
                     break;
                 }
-                case "ton":
+                case "eq": case "ne": case "gt": case "ge": case "lt": case "le":
                 {
+                    var uid = ctx.NewUId();
+                    var name = char.ToUpperInvariant(e.Type[0]) + e.Type.Substring(1).ToLowerInvariant();
+                    ctx.Parts.Add(new XElement(FlgNs + "Part", new XAttribute("Name", name), new XAttribute("UId", uid),
+                        new XElement(FlgNs + "TemplateValue",
+                            new XAttribute("Name", "SrcType"), new XAttribute("Type", "Type"),
+                            string.IsNullOrWhiteSpace(e.DataType) ? "Int" : e.DataType)));
+                    ctx.Connect(cur, uid, "pre");
+                    ctx.ConnectOperand(RequireOperand(e), uid, "in1");
+                    ctx.ConnectOperand(string.IsNullOrWhiteSpace(e.Operand2)
+                        ? throw new ArgumentException($"{e.Type} requires 'operand2' (the right-hand value).") : e.Operand2!, uid, "in2");
+                    cur = Endpoint.Pin(uid, "out");
+                    break;
+                }
+                case "pbox": case "nbox":
+                {
+                    // Edge detect. The operand is the edge-memory bit (a Bool that is not used anywhere else).
+                    var uid = ctx.NewUId();
+                    ctx.Parts.Add(new XElement(FlgNs + "Part",
+                        new XAttribute("Name", e.Type.Equals("pbox", StringComparison.OrdinalIgnoreCase) ? "PBox" : "NBox"),
+                        new XAttribute("UId", uid)));
+                    ctx.Connect(cur, uid, "in");
+                    ctx.ConnectOperand(RequireOperand(e), uid, "bit");
+                    cur = Endpoint.Pin(uid, "out");
+                    break;
+                }
+                case "move":
+                {
+                    if (string.IsNullOrWhiteSpace(e.Source))
+                        throw new ArgumentException("move requires 'source' (value or tag) and 'operand' (destination).");
+                    var uid = ctx.NewUId();
+                    ctx.Parts.Add(new XElement(FlgNs + "Part",
+                        new XAttribute("Name", "Move"), new XAttribute("UId", uid), new XAttribute("DisabledENO", "true"),
+                        new XElement(FlgNs + "TemplateValue",
+                            new XAttribute("Name", "Card"), new XAttribute("Type", "Cardinality"), 1)));
+                    ctx.Connect(cur, uid, "en");
+                    ctx.ConnectOperand(e.Source!, uid, "in");
+                    ctx.ConnectOperandOut(uid, "out1", RequireOperand(e));
+                    ctx.Terminated = true; // DisabledENO: Move has no eno, so no power flow continues from it
+                    cur = Endpoint.Power;
+                    break;
+                }
+                case "call":
+                {
+                    if (string.IsNullOrWhiteSpace(e.Block))
+                        throw new ArgumentException("call requires 'block' (the name of the FB or FC).");
+                    var bt = (e.BlockType ?? "").ToUpperInvariant();
+                    if (bt is not ("FB" or "FC"))
+                        throw new ArgumentException("call requires 'blockType': FB or FC.");
+                    if (bt == "FB" && string.IsNullOrWhiteSpace(e.Instance))
+                        throw new ArgumentException("an FB call requires 'instance' (instance DB name, or \"#multi\" for a multi-instance).");
+                    var uid = ctx.NewUId();
+                    var info = new XElement(FlgNs + "CallInfo", new XAttribute("Name", e.Block!), new XAttribute("BlockType", bt));
+                    if (bt == "FB") info.Add(ctx.InstanceElement(e.Instance!));
+                    var ps = e.Parameters ?? new List<LadParam>();
+                    foreach (var p in ps)
+                    {
+                        if (string.IsNullOrWhiteSpace(p.Name) || string.IsNullOrWhiteSpace(p.Operand))
+                            throw new ArgumentException("every call parameter needs 'name' and 'operand'.");
+                        if (!p.Section.Equals("Input", StringComparison.OrdinalIgnoreCase) &&
+                            !p.Section.Equals("Output", StringComparison.OrdinalIgnoreCase) &&
+                            !p.Section.Equals("InOut", StringComparison.OrdinalIgnoreCase))
+                            throw new ArgumentException($"call parameter '{p.Name}': section must be Input, Output or InOut.");
+                        info.Add(new XElement(FlgNs + "Parameter",
+                            new XAttribute("Name", p.Name), new XAttribute("Section", p.Section), new XAttribute("Type", p.Datatype)));
+                    }
+                    ctx.Parts.Add(new XElement(FlgNs + "Call", new XAttribute("UId", uid), info));
+                    ctx.Connect(cur, uid, "en");
+                    foreach (var p in ps)
+                    {
+                        if (p.Section.Equals("Output", StringComparison.OrdinalIgnoreCase))
+                            ctx.ConnectOperandOut(uid, p.Name, p.Operand);
+                        else
+                            ctx.ConnectOperand(p.Operand, uid, p.Name);
+                    }
+                    cur = Endpoint.Pin(uid, "eno");
+                    break;
+                }
+                case "ton": case "tof": case "tp":
+                {
+                    var timer = e.Type.ToUpperInvariant();
                     if (string.IsNullOrWhiteSpace(e.Instance))
-                        throw new ArgumentException("ton requires 'instance' (\"#Tmr\" for an FB multi-instance, or an instance DB name).");
+                        throw new ArgumentException($"{e.Type} requires 'instance' (\"#Tmr\" for an FB multi-instance, or an instance DB name).");
                     if (string.IsNullOrWhiteSpace(e.Pt))
-                        throw new ArgumentException("ton requires 'pt' (preset time, e.g. \"T#5s\").");
+                        throw new ArgumentException($"{e.Type} requires 'pt' (preset time, e.g. \"T#5s\").");
                     var uid = ctx.NewUId();
                     var inst = ctx.InstanceElement(e.Instance!);
                     ctx.Parts.Add(new XElement(FlgNs + "Part",
-                        new XAttribute("Name", "TON"), new XAttribute("Version", "1.0"), new XAttribute("UId", uid),
+                        new XAttribute("Name", timer), new XAttribute("Version", "1.0"), new XAttribute("UId", uid),
                         inst,
                         new XElement(FlgNs + "TemplateValue",
                             new XAttribute("Name", "time_type"), new XAttribute("Type", "Type"), "Time")));
@@ -149,6 +255,8 @@ public static class LadXmlBuilder
                         if (e.Branches[i].Count == 0)
                             throw new ArgumentException($"branch path {i + 1} is empty; an empty path is a bare wire, which LAD cannot express here.");
                         outs.Add(EmitSeries(ctx, e.Branches[i], cur, $"{where}.branch[{i}]"));
+                        if (ctx.Terminated)
+                            throw new ArgumentException($"'move' cannot be inside a branch ({where}.branch[{i}]); it has no power-flow output to merge.");
                     }
                     var uid = ctx.NewUId();
                     ctx.Parts.Add(new XElement(FlgNs + "Part",
@@ -165,7 +273,7 @@ public static class LadXmlBuilder
                         $"'{e.Type}' belongs in the network's 'outputs', not in 'elements' ({where}).");
                 default:
                     throw new ArgumentException(
-                        $"Unsupported element type '{e.Type}' ({where}). Supported: contact, ton, branch (elements); coil, scoil, rcoil (outputs).");
+                        $"Unsupported element type '{e.Type}' ({where}). Supported elements: contact, eq/ne/gt/ge/lt/le, pbox, nbox, ton, tof, tp, branch, call, move; outputs: coil, scoil, rcoil.");
             }
         }
         return cur;
@@ -288,7 +396,21 @@ public static class LadXmlBuilder
         private readonly Dictionary<string, (XElement Src, List<XElement> Dests)> _wires = new();
         private readonly List<string> _wireOrder = new();
 
+        public bool Terminated { get; set; }
+
         public int NewUId() => ++_uid;
+
+        /// <summary>Output pin -> destination operand (Move.out1, Call output params): source first, then IdentCon.</summary>
+        public void ConnectOperandOut(int srcUId, string srcPin, string operand)
+        {
+            var access = NewAccess(operand);
+            var id = int.Parse(access.Attribute("UId")!.Value);
+            Accesses.Add(access);
+            var key = $"D{srcUId}:{srcPin}";
+            _wires[key] = (new XElement(FlgNs + "NameCon", new XAttribute("UId", srcUId), new XAttribute("Name", srcPin)),
+                           new List<XElement> { new XElement(FlgNs + "IdentCon", new XAttribute("UId", id)) });
+            _wireOrder.Add(key);
+        }
 
         public void Connect(Endpoint src, int destUId, string destPin)
         {
