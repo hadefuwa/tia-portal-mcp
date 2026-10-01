@@ -288,3 +288,11 @@ try {
     (New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd()
 }
 ```
+
+---
+
+## Tool profiles and annotations
+
+`--profile lite|standard|full|readonly` (or `TIA_MCP_PROFILE`) trims the advertised tools; `--annotations` (or `TIA_MCP_ANNOTATIONS=1`) adds `readOnlyHint`/`destructiveHint` to `tools/list`. Both are opt-in; the default is `full`, no annotations.
+
+Verified over stdio: default 39 tools with no `annotations` field; `readonly` exposes 20 look-only tools; `--annotations` marks 20 read-only and 7 destructive; a `tools/call` for a tool outside the profile (e.g. `write_block_scl` under `readonly`) is rejected. `import_tag_table` uses `ImportOptions.Override` (replaces an existing table), so it stays in the destructive set. `create_lad_block` only replaces a block with `overwrite:true`, so it is not marked destructive.
