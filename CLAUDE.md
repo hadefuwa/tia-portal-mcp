@@ -173,6 +173,47 @@ Generated and temp XML files go to `C:\Temp\TiaExports` (configurable in `appset
 
 ---
 
+## LAD generation — `create_lad_block`
+
+`LadXmlBuilder` (`Utilities/`) turns a structured rung into SimaticML `FlgNet`. The model never writes UIds or wires. Reference exports live in `docs/lad-samples/`; tests are in `tests/LadXmlBuilder.Tests` (`dotnet test`, XML only, no TIA).
+
+Supported: NO/NC contact, coil / set (`scoil`) / reset (`rcoil`), compare (`eq ne gt ge lt le`, `dataType` default Int), edge (`pbox`/`nbox`, operand = edge-memory Bool), timers `ton`/`tof`/`tp`, counters `ctu`/`ctd`, flip-flops `sr`/`rs`, parallel `branch`, arithmetic `add`/`mul` (2+ `operands`) and `sub`/`div`/`mod` (exactly 2), `norm_x`/`scale_x`, `move`, `call` of an FB (instance DB or `#multi`) or FC with named `parameters`, and a generic `part` for system functions such as `WR_SYS_T`. `move`, arithmetic and an eno-less `part` are DisabledENO boxes: they must be the last element and the network can have no outputs. `sr`/`rs`/`ctu`/`ctd` take a second power path in `other`. Blocks: FB, FC, OB. Add anything else from a real export, not from memory.
+
+**Confirmed from real V20 exports** (these are what the builder copies):
+- FlgNet namespace is `.../NetworkSource/FlgNet/v5` in V20.
+- `Contact`/`Coil`/`SCoil`/`RCoil` pins are `in`, `operand`, `out`. NC is a child `<Negated Name="operand" />`, not an attribute.
+- `TON` needs `Version="1.0"`, `<TemplateValue Name="time_type" Type="Type">Time</TemplateValue>`, pins `IN`/`PT`/`Q`/`ET`. Unused `ET` is written as a wire to `<OpenCon UId=…/>`.
+- A source driving several pins is **one** `<Wire>` with several `<NameCon>` (the Powerrail feeding two parallel contacts is a single wire).
+- Parallel branches merge into a `Part Name="O"` with `<TemplateValue Name="Card" Type="Cardinality">N</…>` and pins `in1…inN`/`out`. Branch paths share the incoming wire; an empty path cannot be expressed.
+- `T#5s` is a `TypedConstant`; a numeric literal is a `LiteralConstant` with `<ConstantType>`.
+- Interface/`Namespace` rules are the same as GlobalDB above: `<Namespace />` is a child element; omit `MultilingualText` unless the project culture is passed (`culture`), or en-US vs en-GB breaks the import.
+
+**Verified live on V20 (imported, compiled with 0 errors, re-exported; goldens are `docs/lad-samples/05-08`, tests in `LiveGoldenTests.cs`):**
+- Seal-in FB (branch + NC contact + coil, `#local` operands); FC (`Ret_Val`/`Void` is kept by TIA); OB (`SecondaryType` `ProgramCycle`).
+- `TON` with `#Tmr` declared in Static as `TON`: plain `Instance Scope="LocalVariable"` component. TIA re-exports the member as `TON_TIME`.
+- A block referencing tags that do not exist **imports**, then fails compile with `Tag "X" not defined.` The error text is in nested compiler messages (`CompileBlockAsync` now flattens them).
+- Compare `Eq/Ne/Gt/Ge/Lt/Le` (pins `pre`, `in1`, `in2`, `out`; `SrcType` template), `PBox`/`NBox` (pins `in`, `bit`, `out`), `Move` (`DisabledENO="true"`, pins `en`, `in`, `out1`; no `eno`), and `TOF`/`TP` (same pins and `time_type` as `TON`) all import and compile. Goldens `09`.
+- `Call` of an FC with params, an FB with an instance DB, and an FB multi-instance (`#Sub`), plus a param-less call: all compile. `CallInfo` holds `Instance` then `Parameter` elements; output params are wired `NameCon -> IdentCon`. Goldens `10`-`13`. TIA fills in the callee's parameter list on import and re-exports unwired `eno`/outputs as `OpenCon`, so tests compare only the wires the builder writes.
+- Arithmetic: `Add`/`Mul` are `DisabledENO` with `Card=N` + `<AutomaticTyped Name="SrcType" />` (pins `en`, `in1..N`, `out`); `Sub`/`Div`/`Mod` the same without `Card`. `Normalize`/`Scale_X`: `SrcType`+`DestType` templates, pins `en`, `eno`, `min`, `value`, `max`, `out`. `Sr` pins `s`, `r1`, `operand`, `q`; `Rs` pins `r`, `s1`, `operand`, `q`. `CTU`/`CTD` (member types `CTU_INT`/`CTD_INT`): pins `CU`/`CD`, `R`/`LD`, `PV`, `Q`, `CV` (open). TIA tolerated `QU`/`QD` for CTU/CTD on import but re-exports `Q`, so the builder emits `Q`. System function `WR_SYS_T` as a generic `Part` (`Version`, `date_type` template, pins `en`, `IN`, `RET_VAL`) compiles. Goldens `14`-`22`.
+- Round-trip: re-importing unchanged exports of an FB, an FC and an FB with timers under new names (`Name` replaced, `Number` removed, `AutoNumber` true) imports and compiles cleanly.
+- TIA renumbers UIds on re-export, so goldens compare wiring topology, not text.
+
+**Found and fixed from live errors:**
+- OB: TIA refuses an auto-numbered ProgramCycle OB (`'Number' attribute is missing`). The service now picks the lowest free number >= 123 (dryRun shows 123).
+- OB: interface may only have Input/Temp/Constant; an `Output`/`InOut` section is rejected (`Section 'Output' is not valid for this block`). The builder omits them and throws on OB output/inOut/static members.
+- `CreateInstanceDbXml` had the `Namespace`-as-attribute bug and an en-US comment; fixed (verified: instance DB of an FB imports).
+- Import fails with "not supported in online mode" if the PLC is online: go offline first.
+
+**Still NOT verified:**
+- Timer with a non-`#` instance name (`Scope="GlobalVariable"`): it imports but compile fails with `Missing instance DB`, because the DB does not exist. An IEC timer DB cannot be created via `InstanceDB` with `InstanceOfName` `TON`/`TON_TIME` (`Block does not exist`). Needs a real export of a hand-made one (drop a TON in LAD with "single instance") before the builder or `create_instance_db` can support it.
+- Call parameter section `InOut` (emitted like an input; not exercised live). Call parameters need an explicit `datatype`; the builder does not look the callee up.
+- CTUD (up/down counter), `Rs`/`Sr` with more than one set/reset input, and arithmetic on mixed types are not built. The generic `part` with `eno:true` (power flow continuing from a system function) is not exercised live. Other system functions (WWW, CTRL_PWM, ...) work only if their pin names are copied from a real export.
+- Only checked on an S7-1200; S7-1500 may differ.
+
+**Workflow:** `create_lad_block` refuses to replace an existing block unless `overwrite:true`, runs a pre-flight check (unique UIds, wire endpoints resolve, no input pin driven twice, XML well-formed) before touching TIA, and returns the compile output. Compiling is not correctness: have the user review the logic.
+
+---
+
 ## WinCC Unified HMI tag API — confirmed behaviours
 
 Tested against TIA Portal V20 with WinCC Unified. Use `HmiTagService` for all HMI tag operations.
@@ -203,24 +244,31 @@ var table = sw.TagTables["Default tag table"];  // CS1503
 var table = sw.TagTables.Find("Default tag table");
 ```
 
-### Creating tags — partial support only
+### Creating tags and linking them to PLC tags — SOLVED (live-tested on V20)
 
 ```csharp
-// Create() with ONE parameter — works:
-var tag = table.Tags.Create(tagName);
+var tag = table.Tags.Create(tagName);          // works; the new tag is Connection "<Internal tag>"
+tag.SetAttribute("DataType", "Bool");          // works (a PLC link overrides it, see below)
 
-// Create() with TWO parameters — throws "Tag table not found":
-var tag = table.Tags.Create(tagName, dataType);  // DO NOT USE
+// WRONG ORDER — throws "The controller tag DI_A_0 was not found." (this is the old "controller tag not found"):
+tag.SetAttribute("PlcTag", "DI_A_0");
 
-// SetAttribute("DataType", ...) — works after Create():
-tag.SetAttribute("DataType", "Bool");
-
-// SetAttribute("PlcTag", ...) — throws for newly created tags via API:
-tag.SetAttribute("PlcTag", "DI_A_0");  // "controller tag not found"
-// The tag IS created successfully as an Internal tag (Connection = "<Internal tag>").
-// The PlcTag link must be set manually in TIA Portal UI after the tag exists.
-// Workaround: omit PlcTag from Create calls; user links tags to PLC in TIA Portal UI.
+// CORRECT: set the Connection FIRST, then PlcTag:
+tag.SetAttribute("Connection", "HMI_Connection_6");
+tag.SetAttribute("PlcTag", "DI_A_0");          // linked; DataType now follows the PLC tag (Int for IO.Worksheet_Selector)
 ```
+
+The link is `Connection` (an existing HMI connection name) plus `PlcTag`. `create_hmi_tags` does this when a tag has `"bindPlc": true` (off by default; without it tags stay Internal, as before). If the link fails the tag is put back to `<Internal tag>` and returned as `created_unlinked` with the TIA error.
+
+Other findings:
+- `Tags.Create(name, X)`: the second parameter is a **table name**, not a data type. That is why the old `Create(tagName, dataType)` threw "Tag table not found".
+- `Connection` is the attribute name. `ConnectionName` does not exist on `HmiTag` (`ReadTag` now reads `Connection`).
+- TIA does **not** validate the Connection name: `SetAttribute("Connection", "No_Such_Connection")` succeeds and reads back. Only the following `PlcTag` set fails, so the tag must be reverted on failure.
+- Invalid PLC tag: `The controller tag No_Such_DB.Nope was not found.`
+- `Address` exists but cannot be written: on an Internal tag `Set is not allowed for disabled fields`; on a connected tag without a PLC tag `Controller tag is not defined in tag X`. The absolute-address route (`%M0.0`) does not work. `LogicalAddress` and `AddressAccessMode` do not exist on `HmiTag`.
+- Other readable attributes: `AcquisitionMode` (`CyclicOnUse`), `AcquisitionCycle` (`T1s`; `T100ms` on an existing tag), `LinearScaling`, `Address`. `Comment`, `Persistency`, `Quality`, `ArrayElements` are not supported on `HmiTag`.
+- `Tags` (`HmiTagComposition`) has `Export(DirectoryInfo[, name])` and `Import(DirectoryInfo[, name])`; `HmiTagTable` itself has no export/import. The import route was not needed once the link worked, so it was not tried.
+- **DANGER: do not call `GetAttributeInfos()` on an `HmiTag`.** It threw `Property : ConfirmationType not found` and TIA Portal then crashed. Read named attributes one at a time instead.
 
 ### WinCC Unified forcing faceplate — struct tag requirement
 
@@ -247,3 +295,11 @@ try {
     (New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd()
 }
 ```
+
+---
+
+## Tool profiles and annotations
+
+`--profile lite|standard|full|readonly` (or `TIA_MCP_PROFILE`) trims the advertised tools; `--annotations` (or `TIA_MCP_ANNOTATIONS=1`) adds `readOnlyHint`/`destructiveHint` to `tools/list`. Both are opt-in; the default is `full`, no annotations.
+
+Verified over stdio: default 39 tools with no `annotations` field; `readonly` exposes 20 look-only tools; `--annotations` marks 20 read-only and 7 destructive; a `tools/call` for a tool outside the profile (e.g. `write_block_scl` under `readonly`) is rejected. `import_tag_table` uses `ImportOptions.Override` (replaces an existing table), so it stays in the destructive set. `create_lad_block` only replaces a block with `overwrite:true`, so it is not marked destructive.

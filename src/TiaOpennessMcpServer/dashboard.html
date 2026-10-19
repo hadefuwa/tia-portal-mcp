@@ -1135,6 +1135,20 @@ const TOOLS = [
     ],
     invoke: async (v) => api('POST',`/api/devices/${enc(v.device)}/blocks/${enc(v.block)}/xml`,{content:v.content})
   },
+  { id:'create_lad_block', cat:'Blocks', icon:'🪜', name:'create_lad_block',
+    desc:'Creates a LAD block from a structured rung description (no XML, UIds or wires), validates it, imports it, and compiles it. Supports NO/NC contacts, coil, set/reset, TON and parallel branches. Use dryRun to validate without touching TIA Portal.',
+    endpoint:'POST /api/devices/{device}/blocks/lad',
+    params:[
+      { id:'device',    label:'device',    req:true,  type:'string', placeholder:'PLC_1' },
+      { id:'name',      label:'name',      req:true,  type:'string', placeholder:'SealIn' },
+      { id:'type',      label:'type',      req:true,  type:'string', placeholder:'FB', hint:'FB, FC or OB' },
+      { id:'networks',  label:'networks',  req:true,  type:'string', multiline:true,
+        placeholder:'[{"elements":[{"type":"branch","branches":[[{"type":"contact","operand":"Start"}],[{"type":"contact","operand":"Motor"}]]},{"type":"contact","operand":"Stop","negated":true}],"outputs":[{"type":"coil","operand":"Motor"}]}]',
+        hint:'JSON array of networks' },
+      { id:'dryRun',    label:'dryRun',    req:false, type:'string', placeholder:'true', hint:'true = build and validate only' }
+    ],
+    invoke: async (v) => api('POST',`/api/devices/${enc(v.device)}/blocks/lad`,{name:v.name,type:v.type,networks:JSON.parse(v.networks),dryRun:v.dryRun==='true'})
+  },
   { id:'compile_block', cat:'Blocks', icon:'▶', name:'compile_block',
     desc:'Compiles a single block and returns the compiler output, including any errors or warnings with line numbers. Must be called after writing SCL source.',
     endpoint:'POST /api/devices/{device}/blocks/{block}/compile',

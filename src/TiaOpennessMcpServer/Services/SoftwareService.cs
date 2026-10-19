@@ -170,16 +170,14 @@ public sealed class SoftwareService
         return await _sta.RunAsync(() =>
         {
             var plc = GetPlcSoftware(deviceName);
+            Directory.CreateDirectory(_opts.ExportDirectory);
 
             if (req.Type == Models.BlockType.GlobalDB)
             {
-                // Data blocks have no code body, so plain SimaticML import is correct here.
-                Directory.CreateDirectory(_opts.ExportDirectory);
-                var importFile = Path.Combine(_opts.ExportDirectory,
-                    $"create_{deviceName}_{req.Name}.xml");
-                File.WriteAllText(importFile,
-                    XmlHelper.CreateGlobalDbXml(req.Name, req.Number, req.SourceCode));
-
+                // GlobalDB: SimaticML XML import works correctly for DBs.
+                var xmlContent = XmlHelper.CreateGlobalDbXml(req.Name, req.Number, req.SourceCode);
+                var importFile = Path.Combine(_opts.ExportDirectory, $"create_{deviceName}_{req.Name}.xml");
+                File.WriteAllText(importFile, xmlContent);
                 plc.BlockGroup.Blocks.Import(new FileInfo(importFile), ImportOptions.Override);
             }
             else
@@ -191,22 +189,22 @@ public sealed class SoftwareService
             }
 
             var block = FindBlock(plc.BlockGroup, req.Name);
+            _log.LogInformation("Created {Type} {Block} on {Device}.", req.Type, req.Name, deviceName);
+            return BlockToInfo(block);
+        });
+    }
 
-            _log.LogInformation("Created {Type} {Block} on {Device}.",
-                req.Type, req.Name, deviceName);
+    // ── Delete ────────────────────────────────────────────────────────────────
 
-            return new Models.BlockInfo
-            {
-                Name      = block.Name,
-                Type      = MapBlockType(block),
-                Number    = block.Number,
-                Language  = MapLanguage(block),
-                Author    = block.HeaderAuthor ?? "",
-                Comment   = BlockComment(block),
-                Modified  = block.ModifiedDate.ToString("O"),
-                IsKnowHow = block.IsKnowHowProtected,
-                SizeBytes = 0,
-            };
+    public async Task DeleteBlockAsync(string deviceName, string blockName)
+    {
+        _tia.EnsureConnected();
+        await _sta.RunAsync(() =>
+        {
+            var plc   = GetPlcSoftware(deviceName);
+            var block = FindBlock(plc.BlockGroup, blockName);
+            block.Delete();
+            _log.LogInformation("Deleted block {Block} on {Device}.", blockName, deviceName);
         });
     }
 
@@ -225,10 +223,18 @@ public sealed class SoftwareService
                     $"Block '{blockName}' does not support compilation.");
 
             var result   = compilable.Compile();
-            var messages = result.Messages
-                .Cast<CompilerResultMessage>()
-                .Select(m => $"[{m.State}] {m.Description}")
-                .ToList();
+            // Real error text lives in nested child messages; the top-level ones are bare headers.
+            var messages = new List<string>();
+            void Flatten(IEnumerable<CompilerResultMessage> msgs, int depth)
+            {
+                foreach (var m in msgs)
+                {
+                    messages.Add($"{new string(' ', depth * 2)}[{m.State}] {m.Description}"
+                        + (string.IsNullOrEmpty(m.Path) ? "" : $"  ({m.Path})"));
+                    Flatten(m.Messages.Cast<CompilerResultMessage>(), depth + 1);
+                }
+            }
+            Flatten(result.Messages.Cast<CompilerResultMessage>(), 0);
 
             _log.LogInformation("Compiled {Block}: {State} ({W}W {E}E)",
                 blockName, result.State, result.WarningCount, result.ErrorCount);
@@ -277,6 +283,70 @@ public sealed class SoftwareService
         });
     }
 
+    // ── Create LAD block ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds LAD SimaticML from a structured description, validates it, imports it via the same
+    /// path as <see cref="WriteBlockXmlAsync"/> (STA + Override), then compiles. A successful
+    /// import is not success — the compile result is returned with it.
+    /// </summary>
+    public async Task<LadBlockResult> CreateLadBlockAsync(string deviceName, LadBlockRequest req)
+    {
+        // TIA rejects an auto-numbered ProgramCycle OB ("'Number' attribute is missing"), so pick a free
+        // one (user OBs start at 123). dryRun never touches TIA, so it just shows 123.
+        var number = req.Number;
+        if (number is null && req.Type.Equals("OB", StringComparison.OrdinalIgnoreCase))
+        {
+            if (req.DryRun) number = 123;
+            else
+            {
+                _tia.EnsureConnected();
+                var used = (await ListBlocksAsync(deviceName)).Select(b => b.Number).ToHashSet();
+                number = 123;
+                while (used.Contains(number.Value)) number++;
+            }
+        }
+
+        // Pure: throws LadValidationException / ArgumentException with a clear message, no TIA needed.
+        var xml = XmlHelper.CreateLadBlockXml(
+            req.Name, req.Type, number, req.Interface, req.Networks, req.Culture);
+
+        if (req.DryRun)
+            return new LadBlockResult { Name = req.Name, Imported = false, Xml = xml };
+
+        _tia.EnsureConnected();
+
+        if (!req.Overwrite)
+        {
+            var exists = await _sta.RunAsync(() =>
+            {
+                var plc = GetPlcSoftware(deviceName); // unknown device must surface, not read as "block absent"
+                try { FindBlock(plc.BlockGroup, req.Name); return true; }
+                catch (KeyNotFoundException) { return false; }
+            });
+            if (exists)
+                throw new InvalidOperationException(
+                    $"Block '{req.Name}' already exists on '{deviceName}'. Pass overwrite:true to replace it.");
+        }
+
+        await WriteBlockXmlAsync(deviceName, req.Name, xml);
+
+        string? output = null;
+        bool? ok = null;
+        if (req.Compile)
+        {
+            output = await CompileBlockAsync(deviceName, req.Name);
+            var m = System.Text.RegularExpressions.Regex.Match(output, @"Errors:\s+(\d+)");
+            ok = m.Success && m.Groups[1].Value == "0";
+        }
+
+        return new LadBlockResult
+        {
+            Name = req.Name, Imported = true, CompileOutput = output, CompileSucceeded = ok,
+            XmlPath = Path.Combine(_opts.ExportDirectory, $"{deviceName}_{req.Name}_xml_edit.xml"),
+        };
+    }
+
     // ── Create Instance DB ────────────────────────────────────────────────────
 
     public async Task<Models.BlockInfo> CreateInstanceDbAsync(
@@ -309,9 +379,13 @@ public sealed class SoftwareService
             var plc   = GetPlcSoftware(deviceName);
             var block = FindBlock(plc.BlockGroup, blockName);
 
-            Directory.CreateDirectory(_opts.ExportDirectory);
             var path = exportPath ?? Path.Combine(
                 _opts.ExportDirectory, $"{deviceName}_{blockName}.xml");
+
+            // Create the parent of the resolved path, not just ExportDirectory —
+            // a caller-supplied path may point somewhere else entirely.
+            var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
             block.Export(new FileInfo(path), ExportOptions.WithDefaults);
             _log.LogInformation("Exported {Block} → {Path}", blockName, path);
