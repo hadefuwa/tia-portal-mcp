@@ -46,7 +46,8 @@ public sealed class TiaPortalService : IDisposable
     // ── Connection ────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Attaches to a TIA Portal V20 process that is already running on this machine.
+    /// Attaches to a TIA Portal process that is already running on this machine
+    /// (any installed version — see the Program.cs assembly resolver).
     /// Prefers the process that has the target project open (if projectPath is supplied).
     /// </summary>
     public async Task<ProjectInfo> AttachToRunningAsync(string? projectPath = null)
@@ -56,12 +57,24 @@ public sealed class TiaPortalService : IDisposable
             var processes = TiaPortal.GetProcesses();
             if (processes.Count == 0)
                 throw new InvalidOperationException(
-                    "No running TIA Portal process found. Please open TIA Portal V20 first.");
+                    "No running TIA Portal process found. Please open TIA Portal first.");
 
             _log.LogInformation("{Count} TIA Portal process(es) found — attaching…", processes.Count);
 
-            // Prefer the process whose project path matches, otherwise take the first one.
+            // Default to the first process that actually has a project open. TIA spawns
+            // project-less helper instances, and attaching to one of those yields a null
+            // Project and a confusing "no project is open" error.
             TiaPortalProcess targetProcess = processes[0];
+            foreach (TiaPortalProcess p in processes)
+            {
+                if (p.ProjectPath is not null)
+                {
+                    targetProcess = p;
+                    break;
+                }
+            }
+
+            // An explicit path always wins.
             if (!string.IsNullOrWhiteSpace(projectPath))
             {
                 foreach (TiaPortalProcess p in processes)
@@ -109,6 +122,65 @@ public sealed class TiaPortalService : IDisposable
 
             _log.LogInformation("Opened project: {Name}", _project.Name);
             return BuildProjectInfo(_project);
+        });
+    }
+
+    // ── Project texts (translation round trip) ────────────────────────────────
+    // Covers EVERY text in the project - PLC block/network comments, free comments,
+    // interface and UDT member comments, tag comments, and all HMI texts - in one file.
+    // Far broader than editing block XML, which only reaches PLC objects.
+
+    public async Task<object> ExportProjectTextsAsync(string filePath, string sourceCulture, string targetCulture)
+    {
+        EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var fi = new FileInfo(filePath);
+            if (fi.Directory is not null) Directory.CreateDirectory(fi.Directory.FullName);
+            if (fi.Exists) fi.Delete();
+
+            _project!.ExportProjectTexts(
+                fi,
+                new System.Globalization.CultureInfo(sourceCulture),
+                new System.Globalization.CultureInfo(targetCulture));
+
+            fi.Refresh();
+            _log.LogInformation("Exported project texts {Src}->{Tgt} to {Path}",
+                sourceCulture, targetCulture, fi.FullName);
+            return (object)new { path = fi.FullName, bytes = fi.Exists ? fi.Length : 0 };
+        });
+    }
+
+    public async Task ImportProjectTextsAsync(string filePath, bool importAll)
+    {
+        EnsureConnected();
+        if (!File.Exists(filePath))
+            throw new FileNotFoundException($"Project texts file not found: {filePath}");
+
+        await _sta.RunAsync(() =>
+        {
+            _project!.ImportProjectTexts(new FileInfo(filePath), importAll);
+            _log.LogInformation("Imported project texts from {Path} (importAll={All})", filePath, importAll);
+        });
+    }
+
+    public async Task<object> GetLanguagesAsync()
+    {
+        EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var ls = _project!.LanguageSettings;
+            var active = new List<string>();
+            foreach (Language l in ls.ActiveLanguages) active.Add(l.Culture.Name);
+            var all = new List<string>();
+            foreach (Language l in ls.Languages) all.Add(l.Culture.Name);
+            return (object)new
+            {
+                editing   = ls.EditingLanguage?.Culture.Name,
+                reference = ls.ReferenceLanguage?.Culture.Name,
+                active,
+                available = all,
+            };
         });
     }
 

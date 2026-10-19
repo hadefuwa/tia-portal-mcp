@@ -6,7 +6,9 @@ using Siemens.Engineering.HW;
 using Siemens.Engineering.HW.Features;
 using Siemens.Engineering.SW;
 using Siemens.Engineering.SW.Blocks;
+using Siemens.Engineering.SW.ExternalSources;
 using Siemens.Engineering.SW.Tags;
+using System.Text;
 using TiaOpennessMcpServer.Models;
 using TiaOpennessMcpServer.Utilities;
 
@@ -72,7 +74,17 @@ public sealed class SoftwareService
 
                 block.Export(new FileInfo(exportFile), ExportOptions.WithDefaults);
                 xmlContent = File.ReadAllText(exportFile);
-                sclSource  = XmlHelper.ExtractSclSource(xmlContent) ?? "";
+
+                // SCL bodies are a StructuredText token tree in the XML, not text, so read
+                // the source back the same way it is written: via an external source.
+                if (lang == ModelLanguage.SCL)
+                {
+                    var sclFile = Path.Combine(_opts.ExportDirectory, $"{deviceName}_{blockName}.scl");
+                    plc.ExternalSourceGroup.GenerateSource(
+                        new[] { block }, new FileInfo(sclFile));
+                    sclSource = File.ReadAllText(sclFile);
+                }
+
                 _log.LogDebug("Read block {Block} ({Bytes} bytes XML)", blockName, xmlContent.Length);
             }
             catch (Exception ex)
@@ -107,21 +119,47 @@ public sealed class SoftwareService
         _tia.EnsureConnected();
         await _sta.RunAsync(() =>
         {
-            var plc   = GetPlcSoftware(deviceName);
+            var plc = GetPlcSoftware(deviceName);
+            // Fail fast with a clear message if the block does not exist yet.
             var block = FindBlock(plc.BlockGroup, blockName);
 
-            Directory.CreateDirectory(_opts.ExportDirectory);
-            var exportFile = Path.Combine(_opts.ExportDirectory,
-                $"{deviceName}_{blockName}_edit.xml");
-            block.Export(new FileInfo(exportFile), ExportOptions.WithDefaults);
-
-            var xml     = File.ReadAllText(exportFile);
-            var patched = XmlHelper.InjectSclSource(xml, sclSource);
-            File.WriteAllText(exportFile, patched);
-
-            plc.BlockGroup.Blocks.Import(new FileInfo(exportFile), ImportOptions.Override);
+            GenerateFromScl(plc, blockName, sclSource, block.Parent as PlcBlockUserGroup);
             _log.LogInformation("Written SCL to {Block} on {Device}.", blockName, deviceName);
         });
+    }
+
+    /// <summary>
+    /// Imports SCL by writing it to a temporary external source and generating blocks from it.
+    /// This is the only supported Openness route for SCL bodies: SimaticML carries them as a
+    /// StructuredText token tree, never as text, so patching XML cannot work. Generation
+    /// overwrites a block of the same name, which makes this serve both create and update.
+    /// </summary>
+    private void GenerateFromScl(
+        PlcSoftware plc, string name, string sclSource, PlcBlockUserGroup? targetGroup)
+    {
+        Directory.CreateDirectory(_opts.ExportDirectory);
+        var sclFile = Path.Combine(_opts.ExportDirectory, $"{name}.scl");
+        File.WriteAllText(sclFile, sclSource, new UTF8Encoding(false));
+
+        var sources  = plc.ExternalSourceGroup.ExternalSources;
+        var sourceId = $"{name}.scl";
+
+        // A leftover source from a previous run would block CreateFromFile.
+        sources.Find(sourceId)?.Delete();
+
+        var source = sources.CreateFromFile(sourceId, sclFile);
+        try
+        {
+            // Generate into the block's own folder so an update does not relocate it.
+            if (targetGroup is not null)
+                source.GenerateBlocksFromSource(targetGroup, GenerateBlockOption.None);
+            else
+                source.GenerateBlocksFromSource(GenerateBlockOption.None);
+        }
+        finally
+        {
+            source.Delete();
+        }
     }
 
     // ── Create ────────────────────────────────────────────────────────────────
@@ -133,16 +171,25 @@ public sealed class SoftwareService
         {
             var plc = GetPlcSoftware(deviceName);
 
-            Directory.CreateDirectory(_opts.ExportDirectory);
-            var xmlContent = req.Type == Models.BlockType.GlobalDB
-                ? XmlHelper.CreateGlobalDbXml(req.Name, req.Number, req.SourceCode)
-                : XmlHelper.CreateSclBlockXml(req.Name, req.Type.ToString(), req.Number, req.SourceCode);
+            if (req.Type == Models.BlockType.GlobalDB)
+            {
+                // Data blocks have no code body, so plain SimaticML import is correct here.
+                Directory.CreateDirectory(_opts.ExportDirectory);
+                var importFile = Path.Combine(_opts.ExportDirectory,
+                    $"create_{deviceName}_{req.Name}.xml");
+                File.WriteAllText(importFile,
+                    XmlHelper.CreateGlobalDbXml(req.Name, req.Number, req.SourceCode));
 
-            var importFile = Path.Combine(_opts.ExportDirectory,
-                $"create_{deviceName}_{req.Name}.xml");
-            File.WriteAllText(importFile, xmlContent);
+                plc.BlockGroup.Blocks.Import(new FileInfo(importFile), ImportOptions.Override);
+            }
+            else
+            {
+                // FC/FB/OB carry code, so they go through the external-source route.
+                // SourceCode must be a complete declaration, e.g.
+                // FUNCTION "Name" : Void ... BEGIN ... END_FUNCTION
+                GenerateFromScl(plc, req.Name, req.SourceCode, targetGroup: null);
+            }
 
-            plc.BlockGroup.Blocks.Import(new FileInfo(importFile), ImportOptions.Override);
             var block = FindBlock(plc.BlockGroup, req.Name);
 
             _log.LogInformation("Created {Type} {Block} on {Device}.",
@@ -185,6 +232,41 @@ public sealed class SoftwareService
 
             _log.LogInformation("Compiled {Block}: {State} ({W}W {E}E)",
                 blockName, result.State, result.WarningCount, result.ErrorCount);
+
+            return string.Join("\n",
+                $"Result:   {result.State}",
+                $"Errors:   {result.ErrorCount}",
+                $"Warnings: {result.WarningCount}",
+                "",
+                string.Join("\n", messages));
+        });
+    }
+
+    /// <summary>
+    /// Compiles the whole PLC software (equivalent to Compile &gt; Software in TIA Portal).
+    /// Compiling individual blocks does NOT make PLC data types (UDTs) consistent, and an
+    /// inconsistent object exports as an empty file — so this is the fix for empty exports.
+    /// </summary>
+    public async Task<string> CompileSoftwareAsync(string deviceName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var plc = GetPlcSoftware(deviceName);
+
+            var compilable = plc.GetService<ICompilable>()
+                ?? throw new NotSupportedException(
+                    $"PLC software on '{deviceName}' does not support compilation.");
+
+            var result = compilable.Compile();
+
+            var messages = result.Messages
+                .Cast<CompilerResultMessage>()
+                .Select(m => $"[{m.State}] {m.Description}")
+                .ToList();
+
+            _log.LogInformation("Compiled software on {Device}: {State} ({W}W {E}E)",
+                deviceName, result.State, result.WarningCount, result.ErrorCount);
 
             return string.Join("\n",
                 $"Result:   {result.State}",
@@ -290,26 +372,8 @@ public sealed class SoftwareService
             var importFile = Path.Combine(_opts.ExportDirectory,
                 $"{deviceName}_{blockName}_xml_edit.xml");
             File.WriteAllText(importFile, xmlContent);
-
-            // Import to the block's own parent group so Override resolves correctly
-            // for blocks in user-defined subfolders.
-            PlcBlockComposition targetBlocks;
-            try
-            {
-                var existing = FindBlock(plc.BlockGroup, blockName);
-                targetBlocks = existing.Parent switch
-                {
-                    PlcBlockUserGroup ug => ug.Blocks,
-                    PlcBlockGroup     rg => rg.Blocks,
-                    _                   => plc.BlockGroup.Blocks,
-                };
-            }
-            catch
-            {
-                targetBlocks = plc.BlockGroup.Blocks;
-            }
-
-            targetBlocks.Import(new FileInfo(importFile), ImportOptions.Override);
+            FindBlockComposition(plc.BlockGroup, blockName)
+                .Import(new FileInfo(importFile), ImportOptions.Override);
             _log.LogInformation("Imported raw XML for {Block} on {Device}.", blockName, deviceName);
         });
     }
@@ -326,6 +390,137 @@ public sealed class SoftwareService
             plc.BlockGroup.Blocks.Import(new FileInfo(xmlFilePath), ImportOptions.Override);
             _log.LogInformation("Imported block from {Path} into {Device}.", xmlFilePath, deviceName);
         });
+    }
+
+    // ── PLC data types (UDTs) ─────────────────────────────────────────────────
+    // PlcTypeComposition mirrors PlcBlockComposition: PlcType.Export(FileInfo, ExportOptions)
+    // and composition.Import(FileInfo, ImportOptions). Types live in PlcTypeUserGroup folders
+    // exactly as blocks do, so the same group-aware composition lookup is required.
+
+    public async Task<IReadOnlyList<PlcTypeInfo>> ListTypesAsync(string deviceName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var plc = GetPlcSoftware(deviceName);
+            var results = new List<PlcTypeInfo>();
+            CollectTypes(plc.TypeGroup.Types, plc.TypeGroup.Groups, "", results);
+            return (IReadOnlyList<PlcTypeInfo>)results;
+        });
+    }
+
+    public async Task<PlcTypeContent> ReadTypeAsync(string deviceName, string typeName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var plc  = GetPlcSoftware(deviceName);
+            var type = FindType(plc, typeName)
+                       ?? throw new KeyNotFoundException($"PLC data type '{typeName}' not found.");
+
+            var xmlContent = "";
+            try
+            {
+                Directory.CreateDirectory(_opts.ExportDirectory);
+                var safe = typeName.Replace('/', '_').Replace('\\', '_');
+                var exportFile = Path.Combine(
+                    _opts.ExportDirectory,
+                    $"{deviceName}_type_{safe}_{DateTime.UtcNow:yyyyMMddHHmmss}.xml");
+
+                type.Export(new FileInfo(exportFile), ExportOptions.WithDefaults);
+                xmlContent = File.ReadAllText(exportFile);
+                _log.LogDebug("Read type {Type} ({Bytes} bytes XML)", typeName, xmlContent.Length);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning("Export failed for type {Type}: {Msg}", typeName, ex.Message);
+            }
+
+            return new PlcTypeContent
+            {
+                Name          = type.Name,
+                Namespace     = type.Namespace ?? "",
+                IsConsistent  = type.IsConsistent,
+                IsKnowHow     = type.IsKnowHowProtected,
+                Modified      = type.ModifiedDate.ToString("O"),
+                SizeBytes     = xmlContent.Length,
+                XmlContent    = xmlContent,
+            };
+        });
+    }
+
+    public async Task WriteTypeXmlAsync(string deviceName, string typeName, string xmlContent)
+    {
+        _tia.EnsureConnected();
+        if (string.IsNullOrWhiteSpace(xmlContent))
+            throw new ArgumentException("XML content is empty.");
+
+        await _sta.RunAsync(() =>
+        {
+            var plc = GetPlcSoftware(deviceName);
+            Directory.CreateDirectory(_opts.ExportDirectory);
+            var safe = typeName.Replace('/', '_').Replace('\\', '_');
+            var importFile = Path.Combine(_opts.ExportDirectory,
+                $"{deviceName}_type_{safe}_xml_edit.xml");
+            File.WriteAllText(importFile, xmlContent);
+
+            FindTypeComposition(plc, typeName)
+                .Import(new FileInfo(importFile), ImportOptions.Override);
+            _log.LogInformation("Imported raw XML for type {Type} on {Device}.", typeName, deviceName);
+        });
+    }
+
+    private static void CollectTypes(
+        Siemens.Engineering.SW.Types.PlcTypeComposition types,
+        Siemens.Engineering.SW.Types.PlcTypeUserGroupComposition groups,
+        string path,
+        List<PlcTypeInfo> list)
+    {
+        foreach (Siemens.Engineering.SW.Types.PlcType t in types)
+        {
+            list.Add(new PlcTypeInfo
+            {
+                Name         = t.Name,
+                Namespace    = t.Namespace ?? "",
+                Group        = path,
+                IsConsistent = t.IsConsistent,
+                IsKnowHow    = t.IsKnowHowProtected,
+                Modified     = t.ModifiedDate.ToString("O"),
+            });
+        }
+        foreach (Siemens.Engineering.SW.Types.PlcTypeUserGroup g in groups)
+            CollectTypes(g.Types, g.Groups, path.Length == 0 ? g.Name : $"{path}/{g.Name}", list);
+    }
+
+    private static Siemens.Engineering.SW.Types.PlcType? FindType(PlcSoftware plc, string name)
+    {
+        var comp = FindTypeCompositionOrNull(plc.TypeGroup.Types, plc.TypeGroup.Groups, name);
+        if (comp is null) return null;
+        foreach (Siemens.Engineering.SW.Types.PlcType t in comp)
+            if (t.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) return t;
+        return null;
+    }
+
+    /// <summary>Composition that owns the type, falling back to the root for a genuine create.</summary>
+    private static Siemens.Engineering.SW.Types.PlcTypeComposition FindTypeComposition(
+        PlcSoftware plc, string name)
+        => FindTypeCompositionOrNull(plc.TypeGroup.Types, plc.TypeGroup.Groups, name)
+           ?? plc.TypeGroup.Types;
+
+    private static Siemens.Engineering.SW.Types.PlcTypeComposition? FindTypeCompositionOrNull(
+        Siemens.Engineering.SW.Types.PlcTypeComposition types,
+        Siemens.Engineering.SW.Types.PlcTypeUserGroupComposition groups,
+        string name)
+    {
+        foreach (Siemens.Engineering.SW.Types.PlcType t in types)
+            if (t.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) return types;
+
+        foreach (Siemens.Engineering.SW.Types.PlcTypeUserGroup g in groups)
+        {
+            var found = FindTypeCompositionOrNull(g.Types, g.Groups, name);
+            if (found is not null) return found;
+        }
+        return null;
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -346,6 +541,42 @@ public sealed class SoftwareService
         throw new KeyNotFoundException(
             $"No PLC software found for device '{deviceName}'. " +
             "Ensure the device contains a CPU with software.");
+    }
+
+    /// <summary>
+    /// Returns the composition that actually owns <paramref name="name"/> — the root block
+    /// folder or whichever user group the block sits in. Importing with ImportOptions.Override
+    /// only overwrites within the composition it is called on; calling it on the root while the
+    /// block lives in a folder makes TIA fall through to Create and fail with
+    /// "a program element with this fully qualified name already exists".
+    /// Falls back to the root composition when the block does not exist yet (a genuine create).
+    /// </summary>
+    private static PlcBlockComposition FindBlockComposition(PlcBlockGroup root, string name)
+    {
+        if (root.Blocks.Cast<PlcBlock>()
+                .Any(b => b.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return root.Blocks;
+
+        foreach (PlcBlockUserGroup sub in root.Groups)
+        {
+            var found = FindCompositionInUserGroup(sub, name);
+            if (found is not null) return found;
+        }
+        return root.Blocks;
+    }
+
+    private static PlcBlockComposition? FindCompositionInUserGroup(PlcBlockUserGroup group, string name)
+    {
+        if (group.Blocks.Cast<PlcBlock>()
+                .Any(b => b.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return group.Blocks;
+
+        foreach (PlcBlockUserGroup sub in group.Groups)
+        {
+            var found = FindCompositionInUserGroup(sub, name);
+            if (found is not null) return found;
+        }
+        return null;
     }
 
     private static PlcBlock FindBlock(PlcBlockGroup group, string name)

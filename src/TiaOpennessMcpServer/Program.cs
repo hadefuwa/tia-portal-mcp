@@ -14,13 +14,27 @@ using TiaOpennessMcpServer.Services;
 using TiaOpennessMcpServer.Utilities;
 
 // ── Assembly resolver — must run before any Siemens type is referenced ────────
-string[] TiaSearchPaths = new[]
+// TIA Portal's Openness API is version-locked: the assemblies are strongly
+// named per major version (and V21 renamed/split them — see the .csproj
+// comment on TiaVersion), so a build compiled against V20 can only ever load
+// V20's DLLs, and a build compiled against V21 only V21's. TIA_VERSION below
+// is baked in at compile time by the TiaVersion MSBuild property.
+#if TIA_V21
+const string TiaVersion = "V21";
+#else
+const string TiaVersion = "V20";
+#endif
+const string automationRoot = @"C:\Program Files\Siemens\Automation";
+
+string[] TiaSearchPaths =
 {
-    @"C:\Program Files\Siemens\Automation\Portal V20\PublicAPI\V20",
-    @"C:\Program Files\Siemens\Automation\Portal V20\Bin\PublicAPI",
-    @"C:\Program Files\Siemens\Automation\Portal V20\Bin\PublicAPI\Client",
-    @"C:\Program Files\Siemens\Automation\Portal V20\Bin",
+    Path.Combine(automationRoot, $"Portal {TiaVersion}", "PublicAPI", TiaVersion, "net48"),
+    Path.Combine(automationRoot, $"Portal {TiaVersion}", "PublicAPI", TiaVersion),
+    Path.Combine(automationRoot, $"Portal {TiaVersion}", "Bin", "PublicAPI"),
+    Path.Combine(automationRoot, $"Portal {TiaVersion}", "Bin", "PublicAPI", "Client"),
+    Path.Combine(automationRoot, $"Portal {TiaVersion}", "Bin"),
 };
+
 AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
 {
     var n = new AssemblyName(e.Name).Name!;
@@ -31,6 +45,29 @@ AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
     }
     return null;
 };
+
+// Diagnostic only (not used for assembly loading): lets the connect error
+// message tell the user when a *different* TIA Portal version is running
+// than the one this build targets, instead of a bare "not found".
+string[] DetectRunningPortalVersions()
+{
+    try
+    {
+        return Process.GetProcessesByName("Siemens.Automation.Portal")
+            .Select(p => { try { return p.MainModule?.FileName; } catch { return null; } })
+            .Where(path => path is not null)
+            .Select(path =>
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(path!, @"Portal (V\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                return m.Success ? m.Groups[1].Value.ToUpperInvariant() : null;
+            })
+            .Where(v => v is not null)
+            .Select(v => v!)
+            .Distinct()
+            .ToArray();
+    }
+    catch { return Array.Empty<string>(); }
+}
 
 bool stdioMode = Array.IndexOf(args, "--mcp-stdio") >= 0;
 
@@ -48,6 +85,19 @@ services.AddSingleton<HmiTagService>();
 services.AddSingleton<HmiScreenService>();
 
 var sp      = services.BuildServiceProvider();
+
+{
+    var startupLog = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+    var runningVersions = DetectRunningPortalVersions();
+    if (runningVersions.Length > 0 && !runningVersions.Contains(TiaVersion))
+    {
+        startupLog.LogWarning(
+            "This server was built for TIA Portal {Built}, but the running instance is {Running}. " +
+            "Rebuild with -p:TiaVersion={RunningAgain} (see TiaOpennessMcpServer.csproj) or open TIA Portal {BuiltAgain} instead.",
+            TiaVersion, string.Join(", ", runningVersions), string.Join(", ", runningVersions), TiaVersion);
+    }
+}
+
 var tia     = sp.GetRequiredService<TiaPortalService>();
 var hw      = sp.GetRequiredService<HardwareService>();
 var sw      = sp.GetRequiredService<SoftwareService>();
@@ -150,7 +200,11 @@ async Task HandleAsync(HttpListenerContext ctx)
         // ── Connect ───────────────────────────────────────────────────────────
         else if (method == "POST" && path == "/api/connect")
         {
-            try   { await Json(res, await tia.AttachToRunningAsync()); }
+            try
+            {
+                var body = await ReadJson<ConnectRequest>(req);
+                await Json(res, await tia.AttachToRunningAsync(body?.ProjectPath));
+            }
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
@@ -232,6 +286,66 @@ async Task HandleAsync(HttpListenerContext ctx)
                 var body = await ReadJson<BlockTextsRequest>(req);
                 if (body is null) { await Json(res, new { error = "body required" }, 400); return; }
                 await sw.PatchBlockTextsAsync(m["device"], m["block"], body);
+                await Json(res, new { success = true });
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── Project texts / languages ─────────────────────────────────────────
+        else if (method == "GET" && path == "/api/project/languages")
+        {
+            try   { await Json(res, await tia.GetLanguagesAsync()); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        else if (method == "POST" && path == "/api/project/texts/export")
+        {
+            try
+            {
+                var body = await ReadJson<ProjectTextsRequest>(req);
+                await Json(res, await tia.ExportProjectTextsAsync(
+                    body?.Path ?? "", body?.Source ?? "en-US", body?.Target ?? "en-GB"));
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        else if (method == "POST" && path == "/api/project/texts/import")
+        {
+            try
+            {
+                var body = await ReadJson<ProjectTextsRequest>(req);
+                await tia.ImportProjectTextsAsync(body?.Path ?? "", body?.ImportAll ?? true);
+                await Json(res, new { success = true });
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── Software compile (whole PLC) ──────────────────────────────────────
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/compile", out m))
+        {
+            try   { await Json(res, new { result = await sw.CompileSoftwareAsync(m["device"]) }); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── PLC data types (UDTs) ─────────────────────────────────────────────
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/types", out m))
+        {
+            try   { await Json(res, await sw.ListTypesAsync(m["device"])); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/types/{type}", out m))
+        {
+            try   { await Json(res, await sw.ReadTypeAsync(m["device"], m["type"])); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/types/{type}/xml", out m))
+        {
+            try
+            {
+                var body = await ReadJson<XmlWriteRequest>(req);
+                await sw.WriteTypeXmlAsync(m["device"], m["type"], body?.Content ?? "");
                 await Json(res, new { success = true });
             }
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
@@ -518,7 +632,7 @@ async Task<object?> McpDispatch(JsonElement p)
 
     switch (name)
     {
-        case "connect_to_tia_portal":  return await tia.AttachToRunningAsync();
+        case "connect_to_tia_portal":  return await tia.AttachToRunningAsync(A("projectPath", null!));
         case "get_status":
             if (!tia.IsConnected) return new { connected = false };
             try   { return new { connected = true, project = await tia.GetProjectInfoAsync() }; }
@@ -545,6 +659,10 @@ async Task<object?> McpDispatch(JsonElement p)
                 Number     = int.TryParse(A("number"), out var nb) ? (int?)nb : null,
                 SourceCode = A("sourceCode")
             });
+        case "compile_software":       return new { result = await sw.CompileSoftwareAsync(A("device")) };
+        case "list_types":             return await sw.ListTypesAsync(A("device"));
+        case "read_type":              return await sw.ReadTypeAsync(A("device"), A("type"));
+        case "import_type_xml":        await sw.WriteTypeXmlAsync(A("device"), A("type"), A("content")); return new { success = true };
         case "list_tag_tables":        return await tagSvc.GetTagTablesAsync(A("device"));
         case "get_tags":               return await tagSvc.GetTagsAsync(A("device"), A("table"));
         case "analyze_scl":            return await scl.AnalyzeAsync(A("source"), A("blockName", "Block"), A("blockType", "FB"));
@@ -602,6 +720,17 @@ List<object> McpToolDefs() => new()
         McpP("type",        "string", true,  "Block type: FB, FC, OB, or GlobalDB"),
         McpP("sourceCode",  "string", true,  "Full SCL source"),
         McpP("number",      "string", false, "Block number (optional integer)")),
+    McpT("compile_software", "Compiles the whole PLC software (Compile > Software in TIA Portal). Compiling individual blocks does NOT make PLC data types consistent, and inconsistent objects export as empty — run this if read_block or read_type returns no XML.",
+        McpP("device", "string", true, "Device name")),
+    McpT("list_types", "Lists all PLC data types (UDTs) on a device, including those inside type folders.",
+        McpP("device", "string", true, "Device name")),
+    McpT("read_type", "Reads a PLC data type (UDT) and returns its SimaticML XML.",
+        McpP("device", "string", true, "Device name"),
+        McpP("type",   "string", true, "PLC data type name")),
+    McpT("import_type_xml", "Imports raw SimaticML XML into a PLC data type (UDT), overwriting it. Use to edit UDT member comments or structure.",
+        McpP("device",  "string", true, "Device name"),
+        McpP("type",    "string", true, "PLC data type name"),
+        McpP("content", "string", true, "Full SimaticML XML document")),
     McpT("list_tag_tables", "Lists all tag tables on a device with their names and tag counts.",
         McpP("device", "string", true, "Device name")),
     McpT("get_tags", "Returns all tags in a tag table with type, address, and comment.",
@@ -736,6 +865,11 @@ class SclAnalyzeRequest { public string Source    { get; set; } = "";
                           public string BlockType { get; set; } = "FB"; }
 class XmlWriteRequest   { public string Content   { get; set; } = ""; }
 class CloneRequest      { public string Name      { get; set; } = ""; public string Path { get; set; } = ""; }
+class ConnectRequest    { public string? ProjectPath { get; set; } }
+class ProjectTextsRequest { public string Path   { get; set; } = "";
+                            public string Source { get; set; } = "en-US";
+                            public string Target { get; set; } = "en-GB";
+                            public bool   ImportAll { get; set; } = true; }
 
 class TagImportRequest        { public string Content      { get; set; } = ""; }
 class TagBatchRenameRequest   { public List<TagRenameItem> Renames { get; set; } = new(); }
