@@ -23,12 +23,12 @@
 
   <ItemGroup>
     <Reference Include="Siemens.Engineering">
-      <HintPath>$(PROGRAMFILES)\Siemens\Automation\Portal V20\PublicAPI\V20\Siemens.Engineering.dll</HintPath>
+      <HintPath>$(PROGRAMFILES)\Siemens\Automation\Portal V19\PublicAPI\V19\Siemens.Engineering.dll</HintPath>
       <Private>False</Private>
       <SpecificVersion>False</SpecificVersion>
     </Reference>
     <Reference Include="Siemens.Engineering.Hmi">
-      <HintPath>$(PROGRAMFILES)\Siemens\Automation\Portal V20\PublicAPI\V20\Siemens.Engineering.Hmi.dll</HintPath>
+      <HintPath>$(PROGRAMFILES)\Siemens\Automation\Portal V19\PublicAPI\V19\Siemens.Engineering.Hmi.dll</HintPath>
       <Private>False</Private>
       <SpecificVersion>False</SpecificVersion>
     </Reference>

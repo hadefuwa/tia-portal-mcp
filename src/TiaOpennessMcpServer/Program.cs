@@ -16,10 +16,10 @@ using TiaOpennessMcpServer.Utilities;
 // ── Assembly resolver — must run before any Siemens type is referenced ────────
 string[] TiaSearchPaths = new[]
 {
-    @"C:\Program Files\Siemens\Automation\Portal V20\PublicAPI\V20",
-    @"C:\Program Files\Siemens\Automation\Portal V20\Bin\PublicAPI",
-    @"C:\Program Files\Siemens\Automation\Portal V20\Bin\PublicAPI\Client",
-    @"C:\Program Files\Siemens\Automation\Portal V20\Bin",
+    @"C:\Program Files\Siemens\Automation\Portal V19\PublicAPI\V19",
+    @"C:\Program Files\Siemens\Automation\Portal V19\Bin\PublicAPI",
+    @"C:\Program Files\Siemens\Automation\Portal V19\Bin\PublicAPI\Client",
+    @"C:\Program Files\Siemens\Automation\Portal V19\Bin",
 };
 AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
 {

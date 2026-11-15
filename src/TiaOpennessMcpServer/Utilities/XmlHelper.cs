@@ -75,7 +75,7 @@ public static class XmlHelper
         return $"""
             <?xml version="1.0" encoding="utf-8"?>
             <Document>
-              <Engineering version="V20" />
+              <Engineering version="V19" />
               <SW.Blocks.{blockType} ID="0"{number}>
                 <AttributeList>
                   <AutoNumber>false</AutoNumber>
@@ -142,7 +142,7 @@ public static class XmlHelper
         return $"""
             <?xml version="1.0" encoding="utf-8"?>
             <Document>
-              <Engineering version="V20" />
+              <Engineering version="V19" />
               <SW.Blocks.GlobalDB ID="0"{number}>
                 <AttributeList>
                   <AutoNumber>{autoNum}</AutoNumber>
@@ -203,7 +203,7 @@ public static class XmlHelper
         return $"""
             <?xml version="1.0" encoding="utf-8"?>
             <Document>
-              <Engineering version="V20" />
+              <Engineering version="V19" />
               <SW.Blocks.InstanceDB ID="0">
                 <AttributeList>
                   <AutoNumber>{autoNum}</AutoNumber>
@@ -258,7 +258,7 @@ public static class XmlHelper
         return $"""
             <?xml version="1.0" encoding="utf-8"?>
             <Document>
-              <Engineering version="V20" />
+              <Engineering version="V19" />
               <SW.Tags.PlcTagTable ID="0" CompositionName="TagTables">
                 <AttributeList>
                   <Name>{SecurityElement.Escape(tableName)}</Name>
