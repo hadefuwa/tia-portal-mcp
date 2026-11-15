@@ -51,6 +51,80 @@ public sealed class HardwareService
         });
     }
 
+    /// <summary>Recursive dump of every device item: firmware, addresses, network nodes.</summary>
+    public async Task<object> GetDeviceDetailsAsync(string deviceName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var device = FindDevice(deviceName);
+            string typeId = "";
+            try { typeId = device.TypeIdentifier ?? ""; } catch { }
+            return (object)new
+            {
+                name = device.Name,
+                typeIdentifier = typeId,
+                items = device.DeviceItems.Cast<DeviceItem>().Select(DetailItem).ToList(),
+            };
+        });
+    }
+
+    private static string Attr(IEngineeringObject obj, string name)
+    {
+        try { return Convert.ToString(obj.GetAttribute(name)) ?? ""; }
+        catch { return ""; }
+    }
+
+    private static object DetailItem(DeviceItem item)
+    {
+        var nodes = new List<object>();
+        try
+        {
+            var ni = item.GetService<NetworkInterface>();
+            if (ni is not null)
+                foreach (Node n in ni.Nodes)
+                    nodes.Add(new
+                    {
+                        name = n.Name,
+                        address = Attr(n, "Address"),
+                        subnetMask = Attr(n, "SubnetMask"),
+                        gateway = Attr(n, "DefaultGateway"),
+                        subnet = n.ConnectedSubnet?.Name ?? "",
+                    });
+        }
+        catch { }
+
+        var addresses = new List<object>();
+        try
+        {
+            foreach (Address a in item.Addresses)
+                addresses.Add(new
+                {
+                    ioType = a.IoType.ToString(),
+                    start = a.StartAddress,
+                    length = a.Length,
+                    isochronous = Attr(a, "IsochronousMode"),
+                    processImage = Attr(a, "ProcessImage"),
+                });
+        }
+        catch { }
+
+        return new
+        {
+            name = item.Name,
+            position = item.PositionNumber,
+            classification = item.Classification.ToString(),
+            orderNumber = Attr(item, "OrderNumber"),
+            typeIdentifier = Attr(item, "TypeIdentifier"),
+            firmware = Attr(item, "FirmwareVersion"),
+            pnDeviceName = Attr(item, "PnDeviceNameSetDirectly") + "|" + Attr(item, "PnDeviceName"),
+            pnDeviceNumber = Attr(item, "PnDeviceNumber"),
+            nodes,
+            addresses,
+            children = item.DeviceItems.Cast<DeviceItem>().Select(DetailItem).ToList(),
+        };
+    }
+
     // ── S7-1200 generation ────────────────────────────────────────────────────
 
     public async Task<DeviceInfo> GenerateS71200Async(S71200Config config)

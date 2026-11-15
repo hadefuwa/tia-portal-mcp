@@ -260,6 +260,12 @@ async Task HandleAsync(HttpListenerContext ctx)
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/details", out m))
+        {
+            try   { await Json(res, await hw.GetDeviceDetailsAsync(m["device"])); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
         // ── Blocks list ───────────────────────────────────────────────────────
         else if (method == "GET" && TryMatch(path, "/api/devices/{device}/blocks", out m))
         {
