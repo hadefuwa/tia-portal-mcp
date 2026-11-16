@@ -47,6 +47,15 @@ public sealed record HmiTagCreateRequest
     public          bool   BindPlc  { get; init; }
 }
 
+/// <summary>Re-point an EXISTING HMI tag at a different PLC tag (see HmiTagService.RelinkTagsAsync).</summary>
+public sealed record HmiTagRelinkRequest
+{
+    public required string Name       { get; init; }
+    public required string PlcTag     { get; init; }
+    /// <summary>HMI connection name. Empty = keep the tag's current connection.</summary>
+    public          string Connection { get; init; } = "";
+}
+
 public sealed record FaceplateTagUpdate
 {
     public required string ContainerName  { get; init; }

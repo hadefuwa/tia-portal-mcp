@@ -108,7 +108,7 @@ var standardTools = new HashSet<string>(liteTools, StringComparer.OrdinalIgnoreC
     "get_project_signature", "get_block_attributes", "patch_block_texts",
     "create_tag_table", "create_tag", "export_block", "export_tag_table",
     "get_device", "get_io_mapping",
-    "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags", "create_hmi_tags",
+    "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags", "create_hmi_tags", "relink_hmi_tags",
     "list_hmi_screens", "get_screen_tag_refs", "update_faceplate_tags",
 };
 
@@ -134,7 +134,7 @@ readOnlyHintTools.UnionWith(new[] { "export_block", "export_tag_table" }); // wr
 var destructiveHintTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
     "write_block_scl", "import_block_xml", "import_tag_table", "patch_block_texts",
-    "batch_rename_tags", "update_faceplate_tags", "close_project",
+    "batch_rename_tags", "update_faceplate_tags", "close_project", "relink_hmi_tags",
 };
 
 // --annotations (or TIA_MCP_ANNOTATIONS=1) adds MCP tool annotations to
@@ -921,6 +921,13 @@ async Task<object?> McpDispatch(JsonElement p)
         case "create_hmi_tags":
             return await hmiSvc.CreateTagsAsync(
                 A("device"), A("table"), AList<HmiTagCreateRequest>("tags"));
+        case "relink_hmi_tags":
+        {
+            bool relinkDry = AB("dryRun");
+            if (!relinkDry) RequireConfirm();
+            return await hmiSvc.RelinkTagsAsync(
+                A("device"), A("table"), AList<HmiTagRelinkRequest>("tags"), relinkDry);
+        }
         case "list_hmi_screens":     return await hmiScreenSvc.ListScreensAsync(A("device"));
         case "get_screen_tag_refs":  return await hmiScreenSvc.GetScreenTagRefsAsync(A("device"), A("screen"));
         case "update_faceplate_tags":
@@ -1137,6 +1144,19 @@ List<object> McpToolDefs() => new()
             McpP("plcTag",     "string", false, "PLC tag to link, e.g. \"IO.Motor\". Only applied when bindPlc is true"),
             McpP("connection", "string", false, "HMI connection name (default HMI_Connection_6). Only applied when bindPlc is true"),
             McpP("bindPlc",    "boolean", false, "Opt-in, default false. true = link the new tag to plcTag over connection (sets Connection, then PlcTag; the data type follows the PLC tag). If the link fails the tag is left Internal and reported as created_unlinked"))),
+    McpT("relink_hmi_tags",
+        "Re-points EXISTING HMI tags at different PLC tags. Use it when PLC tags were renamed or replaced and HMI tags show "
+      + "the pink 'tag not found' state (create_hmi_tags skips a tag that already has a PLC link). Sets the Connection first, "
+      + "then PlcTag; if TIA refuses the new link the previous Connection and PlcTag are put back and the tag is reported 'failed'. "
+      + "Run with dryRun:true first to see exactly what would change. A real run needs confirm:true.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("table",  "string", false, "HMI tag table to search; omit to search every table"),
+        McpPArr("tags", true, "Tags to re-point",
+            McpP("name",       "string", true,  "Existing HMI tag name"),
+            McpP("plcTag",     "string", true,  "New PLC tag, e.g. \"Light_Seg1_Color_Byte\" or \"IO.Pallet.Home.X_Position\""),
+            McpP("connection", "string", false, "HMI connection name; omit to keep the tag's current connection")),
+        McpP("dryRun",  "boolean", false, "true = only report what would change, write nothing"),
+        McpP("confirm", "boolean", false, "Must be true for a real run (not for dryRun). Confirm the mapping with the user first.")),
     McpT("list_hmi_screens", "Lists the screens on a WinCC Unified HMI device.",
         McpP("device", "string", true, "HMI device name")),
     McpT("get_screen_tag_refs", "Returns every tag referenced by an HMI screen and the screen item referencing it. Read-only.",

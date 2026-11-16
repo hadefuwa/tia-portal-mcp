@@ -117,6 +117,75 @@ public sealed class HmiTagService
         });
     }
 
+    // ── Re-point existing tags at other PLC tags ──────────────────────────────
+
+    /// <summary>
+    /// Re-links EXISTING HMI tags to different PLC tags (create_hmi_tags skips a tag that already has a PLC link).
+    /// Typical use: the PLC tags were renamed or replaced, so the HMI tags show the pink "tag not found" state.
+    /// Sets Connection first (the live-verified order), then PlcTag. If the new link is refused the previous
+    /// Connection and PlcTag are put back and the tag is reported "failed" with the TIA error. tableName
+    /// null/empty = search every HMI tag table. dryRun = only report what would change.
+    /// </summary>
+    public async Task<object> RelinkTagsAsync(string deviceName, string? tableName,
+                                              List<HmiTagRelinkRequest> tags, bool dryRun = false)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var hmi = GetHmiSoftware(deviceName);
+            var tables = new List<HmiTagTable>();
+            if (string.IsNullOrWhiteSpace(tableName))
+                foreach (HmiTagTable t in hmi.TagTables) tables.Add(t);
+            else
+                tables.Add(FindTable(hmi.TagTables, tableName!)
+                    ?? throw new KeyNotFoundException($"HMI tag table '{tableName}' not found."));
+
+            var results = new List<object>();
+            foreach (var req in tags)
+            {
+                HmiTag? tag = null; string? foundIn = null;
+                foreach (var t in tables)
+                {
+                    tag = t.Tags.Cast<HmiTag>()
+                        .FirstOrDefault(x => x.Name.Equals(req.Name, StringComparison.OrdinalIgnoreCase));
+                    if (tag is not null) { foundIn = t.Name; break; }
+                }
+                if (tag is null)
+                {
+                    results.Add(new { name = req.Name, status = "not_found", table = (string?)null,
+                                      previousPlcTag = "", plcTag = req.PlcTag, connection = "", error = (string?)null });
+                    continue;
+                }
+
+                string prevConn = SafeAttr(tag, "Connection");
+                string prevPlc  = SafeAttr(tag, "PlcTag");
+                string conn = !string.IsNullOrEmpty(req.Connection) ? req.Connection
+                            : (!string.IsNullOrEmpty(prevConn) && prevConn != "<Internal tag>") ? prevConn
+                            : "HMI_Connection_6";
+
+                if (dryRun)
+                {
+                    results.Add(new { name = tag.Name, status = "would_relink", table = (string?)foundIn,
+                                      previousPlcTag = prevPlc, plcTag = req.PlcTag, connection = conn, error = (string?)null });
+                    continue;
+                }
+
+                var err = TryBindPlcTag(tag, conn, req.PlcTag);
+                if (err is not null)
+                {
+                    // Put the previous link back (best effort) so a refused relink never leaves the tag Internal.
+                    try { if (!string.IsNullOrEmpty(prevConn)) tag.SetAttribute("Connection", prevConn); } catch { }
+                    try { if (!string.IsNullOrEmpty(prevPlc))  tag.SetAttribute("PlcTag", prevPlc); }     catch { }
+                }
+                _log.LogInformation("Relink HMI tag '{Name}' ({Table}): '{Prev}' -> '{New}': {Result}.",
+                    tag.Name, foundIn, prevPlc, req.PlcTag, err ?? "linked");
+                results.Add(new { name = tag.Name, status = err is null ? "relinked" : "failed", table = (string?)foundIn,
+                                  previousPlcTag = prevPlc, plcTag = req.PlcTag, connection = conn, error = (string?)err });
+            }
+            return (object)results;
+        });
+    }
+
     // ── All tags (flat) ────────────────────────────────────────────────────────
 
     public async Task<object> GetAllTagsAsync(string deviceName)
