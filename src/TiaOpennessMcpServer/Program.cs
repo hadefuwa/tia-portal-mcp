@@ -110,6 +110,7 @@ var standardTools = new HashSet<string>(liteTools, StringComparer.OrdinalIgnoreC
     "get_device", "get_io_mapping",
     "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags", "create_hmi_tags", "relink_hmi_tags",
     "list_hmi_screens", "get_screen_tag_refs", "update_faceplate_tags",
+    "read_hmi_screen", "set_hmi_screen_item", "copy_hmi_screen_item", "dynamize_hmi_screen_item", "set_hmi_item_event_script", "save_project_as",
 };
 
 // readonly = look, never edit. Opt-in (--profile readonly); the default profile
@@ -122,7 +123,7 @@ var readonlyTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     "list_tag_tables", "get_tags", "get_device", "get_io_mapping",
     "get_project_signature", "get_block_attributes", "get_option_packages",
     "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags",
-    "list_hmi_screens", "get_screen_tag_refs",
+    "list_hmi_screens", "get_screen_tag_refs", "read_hmi_screen",
 };
 
 // Tools that only read the project. Used for the MCP readOnlyHint annotation.
@@ -135,6 +136,7 @@ var destructiveHintTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
     "write_block_scl", "import_block_xml", "import_tag_table", "patch_block_texts",
     "batch_rename_tags", "update_faceplate_tags", "close_project", "relink_hmi_tags",
+    "set_hmi_screen_item", "copy_hmi_screen_item", "dynamize_hmi_screen_item", "set_hmi_item_event_script",
 };
 
 // --annotations (or TIA_MCP_ANNOTATIONS=1) adds MCP tool annotations to
@@ -161,6 +163,7 @@ services.AddSingleton<SclAnalyzerService>();
 services.AddSingleton<TagService>();
 services.AddSingleton<HmiTagService>();
 services.AddSingleton<HmiScreenService>();
+services.AddSingleton<HmiScreenEditService>();
 
 var sp      = services.BuildServiceProvider();
 
@@ -183,6 +186,7 @@ var scl     = sp.GetRequiredService<SclAnalyzerService>();
 var tagSvc  = sp.GetRequiredService<TagService>();
 var hmiSvc      = sp.GetRequiredService<HmiTagService>();
 var hmiScreenSvc = sp.GetRequiredService<HmiScreenService>();
+var hmiEditSvc   = sp.GetRequiredService<HmiScreenEditService>();
 
 var mcpLog  = new List<McpLogEntry>();
 var mcpLock = new object();
@@ -933,6 +937,39 @@ async Task<object?> McpDispatch(JsonElement p)
         case "update_faceplate_tags":
             return await hmiScreenSvc.UpdateFaceplateTagsAsync(
                 A("device"), A("screen"), AList<FaceplateTagUpdate>("updates"));
+        case "read_hmi_screen":      return await hmiEditSvc.ReadScreenAsync(A("device"), A("screen"));
+        case "set_hmi_screen_item":
+        {
+            bool dry = AB("dryRun");
+            if (!dry) RequireConfirm();
+            return await hmiEditSvc.SetItemAsync(A("device"), A("screen"), A("item"),
+                new HmiScreenEditService.ItemEdit(AN("text"), AN("processTag"), AN("outputFormat"), AN("visibilityExpression")), dry);
+        }
+        case "copy_hmi_screen_item":
+        {
+            bool dry = AB("dryRun");
+            if (!dry) RequireConfirm();
+            return await hmiEditSvc.CopyItemAsync(A("device"), A("screen"), A("source"), A("newName"),
+                new HmiScreenEditService.ItemEdit(AN("text"), AN("processTag"), AN("outputFormat"), AN("visibilityExpression")),
+                AIN("offsetX"), AIN("offsetY"), dry);
+        }
+        case "dynamize_hmi_screen_item":
+        {
+            bool dry = AB("dryRun");
+            if (!dry) RequireConfirm();
+            return await hmiEditSvc.DynamizeItemAsync(A("device"), A("screen"), A("item"), A("property"),
+                A("scriptCode"), AObj<List<string>>("triggerTags"), AN("triggerType"), dry);
+        }
+        case "set_hmi_item_event_script":
+        {
+            bool dry = AB("dryRun");
+            if (!dry) RequireConfirm();
+            return await hmiEditSvc.SetEventScriptAsync(A("device"), A("screen"), A("item"),
+                A("eventType"), A("scriptCode"), dry);
+        }
+        case "save_project_as":
+            RequireConfirm();
+            return await tia.SaveProjectAsAsync(A("path"));
         case "get_block_attributes": return await sw.GetBlockAttributeInfosAsync(A("device"), A("block"));
         case "patch_block_texts":
             await sw.PatchBlockTextsAsync(A("device"), A("block"),
@@ -1169,6 +1206,70 @@ List<object> McpToolDefs() => new()
             McpP("containerName", "string", true, "Faceplate container name on the screen"),
             McpP("parameterName", "string", true, "Interface parameter to set"),
             McpP("newValue",      "string", true, "New value, usually a tag name"))),
+
+    McpT("read_hmi_screen",
+        "Reads every item on a WinCC Unified screen or popup (nested groups included): name, type, text, position, size, "
+      + "visible/enabled, I/O field ProcessValue/OutputFormat, the bound tag, all dynamizations (tag, script, expression) and "
+      + "event/property-event scripts. Read-only. Run it before and after an edit to diff the screen.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen or popup name")),
+    McpT("set_hmi_screen_item",
+        "Edits ONE named item on a screen: text (editing-language entry), I/O field process tag (HMI tag name), output format, "
+      + "or a Visible expression. Pass only what should change. Use dryRun:true to preview; a real run needs confirm:true "
+      + "and returns before/after. Work on a copy of the project (save_project_as) first.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen or popup name"),
+        McpP("item",   "string", true, "Item name"),
+        McpP("text", "string", false, "New text for a label/button"),
+        McpP("processTag", "string", false, "HMI tag to bind to the item's ProcessValue"),
+        McpP("outputFormat", "string", false, "Number format, e.g. {0:d} or {0:F2}"),
+        McpP("visibilityExpression", "string", false, "Expression for the Visible property"),
+        McpP("dryRun", "boolean", false, "true = report only, write nothing"),
+        McpP("confirm", "boolean", false, "Must be true for a real run")),
+    McpT("copy_hmi_screen_item",
+        "Duplicates an item on the same screen under a new name (properties and dynamizations are copied; event scripts are "
+      + "not and are reported), optionally with new text, tag, format and offset. If the copy fails part-way the new item is removed. "
+      + "dryRun previews; a real run needs confirm:true.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen or popup name"),
+        McpP("source", "string", true, "Existing item to copy"),
+        McpP("newName", "string", true, "Name of the new item (must not exist)"),
+        McpP("text", "string", false, "Text for the copy"),
+        McpP("processTag", "string", false, "HMI tag for the copy's ProcessValue"),
+        McpP("outputFormat", "string", false, "Number format for the copy"),
+        McpP("visibilityExpression", "string", false, "Visible expression for the copy"),
+        McpP("offsetX", "integer", false, "Move the copy by this many pixels horizontally"),
+        McpP("offsetY", "integer", false, "Move the copy by this many pixels vertically"),
+        McpP("dryRun", "boolean", false, "true = report only"),
+        McpP("confirm", "boolean", false, "Must be true for a real run")),
+    McpT("dynamize_hmi_screen_item",
+        "Attaches a Unified JavaScript script dynamization to one property of one item, e.g. Text driven by a tag. "
+      + "scriptCode is the function body (use 'return ...;'). Re-running updates an existing script dynamization; it refuses to "
+      + "replace a Tag/Expression dynamization. dryRun previews; a real run needs confirm:true.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen or popup name"),
+        McpP("item",   "string", true, "Item name"),
+        McpP("property", "string", true, "Property to dynamize, e.g. Text"),
+        McpP("scriptCode", "string", true, "Script body"),
+        McpPArrOf("triggerTags", "string", false, "HMI tags that re-run the script when they change"),
+        McpP("triggerType", "string", false, "Used when no triggerTags: T1s, T100ms, ..."),
+        McpP("dryRun", "boolean", false, "true = report only"),
+        McpP("confirm", "boolean", false, "Must be true for a real run")),
+    McpT("set_hmi_item_event_script",
+        "Sets the Unified JavaScript for an event on one item (e.g. Tapped, Activated, ValueChanged), creating the handler if needed. "
+      + "dryRun previews; a real run needs confirm:true.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen or popup name"),
+        McpP("item",   "string", true, "Item name"),
+        McpP("eventType", "string", true, "Event name as shown by read_hmi_screen"),
+        McpP("scriptCode", "string", true, "Script body"),
+        McpP("dryRun", "boolean", false, "true = report only"),
+        McpP("confirm", "boolean", false, "Must be true for a real run")),
+    McpT("save_project_as",
+        "Saves the open project to a NEW folder; TIA then keeps that copy open (the original .ap21 is left as last saved). "
+      + "Use it to get a safe working copy before editing screens. Needs confirm:true. Save the original in TIA first.",
+        McpP("path", "string", true, "Empty destination folder, e.g. C:\\Temp\\SF2_scratch"),
+        McpP("confirm", "boolean", false, "Must be true")),
 
     // ── Block inspection ──────────────────────────────────────────────────────
     McpT("get_block_attributes", "Lists every readable and writable attribute and composition on a block. Use to discover what set_* operations are possible.",

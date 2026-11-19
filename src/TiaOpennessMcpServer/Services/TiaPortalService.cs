@@ -194,6 +194,22 @@ public sealed class TiaPortalService : IDisposable
         });
     }
 
+    /// <summary>Project.SaveAs: writes a full copy (HMI included) and keeps the copy open.</summary>
+    public async Task<object> SaveProjectAsAsync(string folder)
+    {
+        EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var dir = new DirectoryInfo(folder);
+            if (dir.Exists && dir.EnumerateFileSystemInfos().Any())
+                throw new InvalidOperationException($"'{folder}' exists and is not empty; choose a new folder.");
+            var from = _project!.Path?.FullName;
+            _log.LogInformation("Saving project as {Dir}…", folder);
+            _project.SaveAs(dir);
+            return (object)new { savedTo = _project.Path?.FullName, original = from, note = "TIA now has the copy open; the original file was not modified." };
+        });
+    }
+
     public async Task<ProjectInfo> GetProjectInfoAsync()
     {
         EnsureConnected();
