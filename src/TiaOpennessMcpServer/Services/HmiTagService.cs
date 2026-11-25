@@ -117,6 +117,29 @@ public sealed class HmiTagService
         });
     }
 
+    // ── Delete tags by name ────────────────────────────────────────────────────
+
+    public async Task<object> DeleteTagsAsync(string deviceName, string tableName, List<string> names)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var hmi = GetHmiSoftware(deviceName);
+            var table = hmi.TagTables.Find(tableName)
+                ?? throw new KeyNotFoundException($"HMI tag table '{tableName}' not found.");
+            var results = new List<object>();
+            foreach (var n in names)
+            {
+                var tag = table.Tags.Cast<HmiTag>()
+                    .FirstOrDefault(t => t.Name.Equals(n, StringComparison.OrdinalIgnoreCase));
+                if (tag is null) { results.Add(new { name = n, status = "not_found" }); continue; }
+                tag.Delete();
+                results.Add(new { name = n, status = "deleted" });
+            }
+            return (object)results;
+        });
+    }
+
     // ── All tags (flat) ────────────────────────────────────────────────────────
 
     public async Task<object> GetAllTagsAsync(string deviceName)

@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Siemens.Engineering;
 using Siemens.Engineering.HW;
@@ -8,6 +8,10 @@ using Siemens.Engineering.HmiUnified.UI.Base;
 using Siemens.Engineering.HmiUnified.UI.Controls;
 using Siemens.Engineering.HmiUnified.UI.Dynamization;
 using Siemens.Engineering.HmiUnified.UI.Parts;
+using Siemens.Engineering.HmiUnified.HmiConnections;
+using Siemens.Engineering.HmiUnified.UI.Enum;
+using Siemens.Engineering.HmiUnified.UI.Shapes;
+using Siemens.Engineering.HmiUnified.UI.Widgets;
 using Siemens.Engineering.HmiUnified.UI.ScreenGroup;
 using Siemens.Engineering.HmiUnified.UI.Screens;
 using TiaOpennessMcpServer.Models;
@@ -189,6 +193,433 @@ public sealed class HmiScreenService
         });
     }
 
+    // ── HMI connections (read only) ───────────────────────────────────────────
+
+    public async Task<object> ListConnectionsAsync(string deviceName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var hmi = GetHmiSoftware(deviceName);
+            var list = new List<object>();
+            foreach (var c in hmi.Connections)
+                list.Add(new { name = c.Name, driver = c.CommunicationDriver, station = c.Station,
+                               partner = c.Partner, node = c.Node, initialAddress = c.InitialAddress });
+            return (object)list;
+        });
+    }
+
+    // ── Items on one screen (read only) ───────────────────────────────────────
+
+    public async Task<object> ListScreenItemsAsync(string deviceName, string screenName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var hmi = GetHmiSoftware(deviceName);
+            var screen = FindScreen(hmi, screenName)
+                ?? throw new KeyNotFoundException($"HMI screen '{screenName}' not found.");
+            string? Attr(HmiScreenItemBase i, string n)
+            { try { return i.GetAttribute(n)?.ToString(); } catch { return null; } }
+
+            var list = new List<object>();
+            foreach (HmiScreenItemBase i in screen.ScreenItems)
+                list.Add(new {
+                    name = i.Name, type = i.GetType().Name,
+                    left = Attr(i, "Left"), top = Attr(i, "Top"),
+                    width = Attr(i, "Width"), height = Attr(i, "Height"),
+                    processValue = Attr(i, "ProcessValue"),
+                });
+            return (object)new { screen = screen.Name, width = screen.Width, height = screen.Height, items = list };
+        });
+    }
+
+    // ── Layout check (read only) ──────────────────────────────────────────────
+
+    /// <summary>Flags items that run off the screen and items that partially overlap (full containment, such as a
+    /// button on a card, is treated as intentional).</summary>
+    public async Task<object> CheckLayoutAsync(string deviceName, string screenName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var hmi = GetHmiSoftware(deviceName);
+            var screen = FindScreen(hmi, screenName)
+                ?? throw new KeyNotFoundException($"HMI screen '{screenName}' not found.");
+            int sw = (int)screen.Width, sh = (int)screen.Height;
+            int Num(HmiScreenItemBase i, string n)
+            { try { return System.Convert.ToInt32(i.GetAttribute(n)); } catch { return 0; } }
+
+            var items = new List<(string Name, string Type, int L, int T, int R, int B)>();
+            foreach (HmiScreenItemBase i in screen.ScreenItems)
+            {
+                int l = Num(i, "Left"), t = Num(i, "Top"), w = Num(i, "Width"), h = Num(i, "Height");
+                items.Add((i.Name, i.GetType().Name, l, t, l + w, t + h));
+            }
+
+            var errors = new List<string>();
+            var warnings = new List<string>();
+            foreach (var a in items)
+            {
+                if (a.L < 0 || a.T < 0 || a.R > sw || a.B > sh)
+                    errors.Add($"{a.Name} ({a.Type}) is outside the {sw}x{sh} screen: {a.L},{a.T} to {a.R},{a.B}. Move or resize it.");
+                if (a.R <= a.L || a.B <= a.T)
+                    warnings.Add($"{a.Name} ({a.Type}) has zero or negative size.");
+            }
+            for (int x = 0; x < items.Count; x++)
+                for (int y = x + 1; y < items.Count; y++)
+                {
+                    var a = items[x]; var b = items[y];
+                    bool inter = a.L < b.R && b.L < a.R && a.T < b.B && b.T < a.B;
+                    if (!inter) continue;
+                    bool aInB = b.L <= a.L && b.T <= a.T && b.R >= a.R && b.B >= a.B;
+                    bool bInA = a.L <= b.L && a.T <= b.T && a.R >= b.R && a.B >= b.B;
+                    if (aInB || bInA) continue;
+                    errors.Add($"{a.Name} and {b.Name} partially overlap. Separate them.");
+                }
+            var verdict = errors.Count > 0 ? "fail" : warnings.Count > 0 ? "warn" : "pass";
+            return (object)new { screen = screen.Name, width = sw, height = sh, itemCount = items.Count, verdict, errors, warnings };
+        });
+    }
+
+    // ── Bind a property to an HMI tag (dynamization) ──────────────────────────
+
+    /// <summary>Creates a TagDynamization on a screen item property (e.g. BackColor, Text) via reflection, using the
+    /// concrete type only: an abstract dynamization type crashes TIA. Reads the result back.</summary>
+    public async Task<object> BindTagAsync(string deviceName, string screenName, string itemName, string property, string tagName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var hmi = GetHmiSoftware(deviceName);
+            var screen = FindScreen(hmi, screenName)
+                ?? throw new KeyNotFoundException($"HMI screen '{screenName}' not found.");
+            HmiScreenItemBase? item = null;
+            foreach (HmiScreenItemBase i in screen.ScreenItems)
+                if (i.Name.Equals(itemName, StringComparison.OrdinalIgnoreCase)) { item = i; break; }
+            if (item is null) throw new KeyNotFoundException($"Item '{itemName}' not found on '{screenName}'.");
+
+            var dynProp = item.GetType().GetProperty("Dynamizations")
+                ?? throw new NotSupportedException($"{item.GetType().Name} has no Dynamizations.");
+            var comp = dynProp.GetValue(item) ?? throw new NotSupportedException("Dynamizations is null.");
+            var dynType = typeof(HmiScreenItemBase).Assembly.GetTypes()
+                .FirstOrDefault(t => t.Name == "TagDynamization" && !t.IsAbstract)
+                ?? throw new NotSupportedException("TagDynamization type not found in this Openness version.");
+            var create = comp.GetType().GetMethods()
+                .FirstOrDefault(m => m.Name == "Create" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1)
+                ?? throw new NotSupportedException("Dynamizations has no generic Create.");
+            var dyn = create.MakeGenericMethod(dynType).Invoke(comp, new object[] { property })
+                ?? throw new InvalidOperationException("Create returned null.");
+            var tagProp = dynType.GetProperty("Tag") ?? throw new NotSupportedException("TagDynamization has no Tag property.");
+            tagProp.SetValue(dyn, tagProp.PropertyType == typeof(string) ? tagName : System.Convert.ChangeType(tagName, tagProp.PropertyType));
+            return (object)new { item = itemName, property, tag = tagProp.GetValue(dyn)?.ToString(), status = "bound" };
+        });
+    }
+
+    // ── Download probe (read only) ────────────────────────────────────────────
+
+    /// <summary>Checks whether the HMI device item offers a DownloadProvider and lists the connection modes,
+    /// PC interfaces and target interfaces it sees. Downloads nothing.</summary>
+    public async Task<object> ProbeDownloadAsync(string deviceName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var found = new List<object>();
+            foreach (Device device in _tia.Project!.Devices)
+            {
+                if (!device.Name.Equals(deviceName, StringComparison.OrdinalIgnoreCase)) continue;
+                var items = new List<IEngineeringServiceProvider> { device };
+                foreach (DeviceItem di in device.DeviceItems) items.Add(di);
+                foreach (var sp in items)
+                {
+                    Siemens.Engineering.Download.DownloadProvider? dp = null;
+                    try { dp = sp.GetService<Siemens.Engineering.Download.DownloadProvider>(); } catch { }
+                    if (dp is null) { found.Add(new { host = sp.GetType().Name, downloadProvider = false }); continue; }
+                    var modes = new List<object>();
+                    foreach (var mode in dp.Configuration.Modes)
+                    {
+                        var pcs = new List<object>();
+                        foreach (var pc in mode.PcInterfaces)
+                        {
+                            var targets = new List<string>();
+                            try { foreach (var t in pc.TargetInterfaces) targets.Add(t.Name); } catch (Exception ex) { targets.Add("ERROR: " + ex.Message); }
+                            pcs.Add(new { name = pc.Name, number = pc.Number, targets });
+                        }
+                        modes.Add(new { name = mode.Name, pcInterfaces = pcs });
+                    }
+                    found.Add(new { host = sp.GetType().Name, downloadProvider = true, modes });
+                }
+            }
+            return (object)found;
+        });
+    }
+
+    // ── Download (outward-facing) ─────────────────────────────────────────────
+
+    /// <summary>Downloads the HMI software through one PC interface and target interface. Overwrites the
+    /// runtime on the target. UNVERIFIED on V19. A dialog in TIA can block the STA thread.</summary>
+    public async Task<object> DownloadAsync(string deviceName, string pcInterface, int pcNumber, string target)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            foreach (Device device in _tia.Project!.Devices)
+            {
+                if (!device.Name.Equals(deviceName, StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (DeviceItem di in device.DeviceItems)
+                {
+                    Siemens.Engineering.Download.DownloadProvider? dp = null;
+                    try { dp = di.GetService<Siemens.Engineering.Download.DownloadProvider>(); } catch { }
+                    if (dp is null) continue;
+                    var mode = dp.Configuration.Modes.Find("PN/IE")
+                        ?? throw new KeyNotFoundException("PN/IE mode not offered.");
+                    var pc = mode.PcInterfaces.Find(pcInterface, pcNumber)
+                        ?? throw new KeyNotFoundException($"PC interface '{pcInterface}' #{pcNumber} not found.");
+                    var ti = pc.TargetInterfaces.Find(target)
+                        ?? throw new KeyNotFoundException($"Target '{target}' not found.");
+                    var res = dp.Download(ti,
+                        c => { },
+                        c => { },
+                        Siemens.Engineering.Download.DownloadOptions.Software);
+                    var msgs = new List<string>();
+                    try { foreach (var m in res.Messages) msgs.Add($"{m.State}: {m.Message}"); } catch { }
+                    return (object)new { pcInterface, pcNumber, target, state = res.State.ToString(), messages = msgs };
+                }
+            }
+            throw new NotSupportedException("No download service found on that device.");
+        });
+    }
+
+    // ── Delete a screen ───────────────────────────────────────────────────────
+
+    public async Task<object> DeleteScreenAsync(string deviceName, string screenName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var hmi = GetHmiSoftware(deviceName);
+            var screen = FindScreen(hmi, screenName)
+                ?? throw new KeyNotFoundException($"HMI screen '{screenName}' not found.");
+            screen.Delete();
+            return (object)new { screen = screenName, status = "deleted" };
+        });
+    }
+
+    // ── Compile the HMI software ──────────────────────────────────────────────
+
+    public async Task<object> CompileHmiAsync(string deviceName)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            // HmiSoftware itself has no GetService; the compile service hangs off the device item that hosts it.
+            Siemens.Engineering.Compiler.ICompilable? compilable = null;
+            foreach (Device device in _tia.Project!.Devices)
+            {
+                if (!device.Name.Equals(deviceName, StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (DeviceItem di in device.DeviceItems)
+                    if (di.GetService<SoftwareContainer>()?.Software is HmiSoftware)
+                    { compilable = di.GetService<Siemens.Engineering.Compiler.ICompilable>(); if (compilable is not null) break; }
+                compilable ??= device.GetService<Siemens.Engineering.Compiler.ICompilable>();
+            }
+            if (compilable is null)
+                throw new NotSupportedException("This HMI device does not offer a compile service through Openness.");
+            var result = compilable.Compile();
+            var messages = new List<string>();
+            void Flatten(IEnumerable<Siemens.Engineering.Compiler.CompilerResultMessage> msgs, int depth)
+            {
+                foreach (var m in msgs)
+                {
+                    messages.Add($"{new string(' ', depth * 2)}[{m.State}] {m.Description}");
+                    Flatten(m.Messages, depth + 1);
+                }
+            }
+            Flatten(result.Messages, 0);
+            return (object)new { state = result.State.ToString(), errors = result.ErrorCount,
+                                 warnings = result.WarningCount, messages };
+        });
+    }
+
+    // ── Build a screen: create (optional), clear (optional), add items ───────
+    // Per-item and per-attribute errors are returned, not thrown, so a bad
+    // attribute does not lose the rest of the screen.
+
+    public async Task<object> BuildScreenAsync(string deviceName, string screenName, HmiScreenBuildRequest req)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var hmi = GetHmiSoftware(deviceName);
+            var screen = FindScreen(hmi, screenName);
+            if (screen is null)
+            {
+                if (!req.Create) throw new KeyNotFoundException($"HMI screen '{screenName}' not found (set create:true to make it).");
+                screen = hmi.Screens.Create(screenName);
+            }
+            if (req.Width  is uint w) screen.Width  = w;
+            if (req.Height is uint h) screen.Height = h;
+
+            if (req.Clear)
+            {
+                var existing = new List<HmiScreenItemBase>();
+                foreach (HmiScreenItemBase i in screen.ScreenItems) existing.Add(i);
+                foreach (var i in existing) i.Delete();
+            }
+
+            var results = new List<object>();
+            foreach (var spec in req.Items)
+            {
+                var errors = new List<string>();
+                try
+                {
+                    HmiScreenItemBase item = spec.Type.ToLowerInvariant() switch
+                    {
+                        "text" or "label" => screen.ScreenItems.Create<HmiLabel>(spec.Name),
+                        "iofield"      => screen.ScreenItems.Create<HmiIOField>(spec.Name),
+                        "button"       => screen.ScreenItems.Create<HmiButton>(spec.Name),
+                        "rectangle"    => screen.ScreenItems.Create<HmiRectangle>(spec.Name),
+                        "circle"       => screen.ScreenItems.Create<HmiCircle>(spec.Name),
+                        "toggleswitch" => screen.ScreenItems.Create<HmiToggleSwitch>(spec.Name),
+                        _ => CreateByTypeName(screen, spec.Type, spec.Name),
+                    };
+
+                    Try(errors, "Left",   () => item.SetAttribute("Left",   spec.Left));
+                    Try(errors, "Top",    () => item.SetAttribute("Top",    spec.Top));
+                    Try(errors, "Width",  () => item.SetAttribute("Width",  spec.Width));
+                    Try(errors, "Height", () => item.SetAttribute("Height", spec.Height));
+
+                    if (spec.Text is not null)
+                        Try(errors, "Text", () => SetText(item, "Text", spec.Text));
+                    if (spec.ProcessValue is not null)
+                        Try(errors, "ProcessValue", () => item.SetAttribute("ProcessValue", spec.ProcessValue));
+                    if (spec.IoType is not null && item is HmiIOField io)
+                        Try(errors, "IOFieldType", () =>
+                            io.IOFieldType = (HmiIOFieldType)Enum.Parse(typeof(HmiIOFieldType), spec.IoType, true));
+
+                    if (spec.OnTap is not null)
+                        Try(errors, "OnTap", () =>
+                        {
+                            if (item is not HmiButton btn)
+                                throw new InvalidOperationException("onTap only applies to buttons.");
+                            var h = btn.EventHandlers.Find(HmiButtonEventType.Tapped)
+                                    ?? btn.EventHandlers.Create(HmiButtonEventType.Tapped);
+                            h.Script.ScriptCode = spec.OnTap;
+                            var check = h.Script.SyntaxCheck();
+                            var text = check?.ToString() ?? "";
+                            if (check is not null && text.IndexOf("rror", StringComparison.OrdinalIgnoreCase) >= 0)
+                                throw new InvalidOperationException("script syntax check: " + text);
+                        });
+
+                    if (spec.Attributes is not null)
+                        foreach (var kv in spec.Attributes)
+                            Try(errors, kv.Key, () => ApplyAttribute(item, kv.Key, kv.Value));
+
+                    results.Add(new { name = spec.Name, type = spec.Type, status = errors.Count == 0 ? "created" : "created_with_errors", errors });
+                }
+                catch (Exception ex)
+                {
+                    results.Add(new { name = spec.Name, type = spec.Type, status = "failed", errors = new[] { ex.Message } });
+                }
+            }
+            _log.LogInformation("Built HMI screen '{Screen}' on '{Device}': {Count} items.", screenName, deviceName, req.Items.Count);
+            return (object)new { screen = screen.Name, width = screen.Width, height = screen.Height, items = results };
+        });
+    }
+
+    // Any other screen-item class by name, e.g. "TextBox", "HmiTextBox", "Slider".
+    private static HmiScreenItemBase CreateByTypeName(HmiScreen screen, string typeName, string name)
+    {
+        var asm = typeof(HmiButton).Assembly;
+        var t = asm.GetType($"Siemens.Engineering.HmiUnified.UI.Widgets.{typeName}")
+             ?? asm.GetType($"Siemens.Engineering.HmiUnified.UI.Widgets.Hmi{typeName}")
+             ?? asm.GetType($"Siemens.Engineering.HmiUnified.UI.Shapes.{typeName}")
+             ?? asm.GetType($"Siemens.Engineering.HmiUnified.UI.Shapes.Hmi{typeName}")
+             ?? FindItemType(asm, typeName)
+             ?? throw new ArgumentException($"Unknown item type '{typeName}'. Similar: " + string.Join(", ", SimilarTypes(asm, typeName)));
+        var create = screen.ScreenItems.GetType().GetMethods()
+            .First(m => m.Name == "Create" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1)
+            .MakeGenericMethod(t);
+        try { return (HmiScreenItemBase)create.Invoke(screen.ScreenItems, new object[] { name })!; }
+        catch (System.Reflection.TargetInvocationException ex) when (ex.InnerException is not null)
+        { throw ex.InnerException; }
+    }
+
+    // Any HmiUnified.UI type whose simple name matches (with or without the Hmi prefix), e.g. "ScreenWindow".
+    private static Type? FindItemType(System.Reflection.Assembly asm, string typeName)
+    {
+        try
+        {
+            return asm.GetTypes().FirstOrDefault(t => t.IsClass && !t.IsAbstract
+                && (t.Namespace ?? "").StartsWith("Siemens.Engineering.HmiUnified.UI", StringComparison.Ordinal)
+                && (t.Name.Equals(typeName, StringComparison.OrdinalIgnoreCase)
+                    || t.Name.Equals("Hmi" + typeName, StringComparison.OrdinalIgnoreCase)));
+        }
+        catch (System.Reflection.ReflectionTypeLoadException) { return null; }
+    }
+
+    private static IEnumerable<string> SimilarTypes(System.Reflection.Assembly asm, string typeName)
+    {
+        try
+        {
+            var key = typeName.Replace("Hmi", "");
+            return asm.GetTypes()
+                .Where(t => (t.Namespace ?? "").StartsWith("Siemens.Engineering.HmiUnified.UI", StringComparison.Ordinal)
+                            && t.Name.IndexOf(key, StringComparison.OrdinalIgnoreCase) >= 0)
+                .Select(t => t.FullName ?? t.Name).Take(15).ToList();
+        }
+        catch (System.Reflection.ReflectionTypeLoadException) { return new[] { "(type scan failed)" }; }
+    }
+
+    private static void Try(List<string> errors, string what, Action a)
+    {
+        try { a(); }
+        catch (Exception ex) { errors.Add($"{what}: {ex.Message}"); }
+    }
+
+    private static void SetText(HmiScreenItemBase item, string property, string text)
+    {
+        var mt = item.GetType().GetProperty(property)?.GetValue(item) as Siemens.Engineering.MultilingualText
+            ?? throw new InvalidOperationException($"'{property}' is not a text property on {item.GetType().Name}.");
+        foreach (Siemens.Engineering.MultilingualTextItem t in mt.Items)
+            t.Text = text;
+    }
+
+    // Converts JSON-ish values to what SetAttribute expects.
+    private static void ApplyAttribute(HmiScreenItemBase item, string key, object? value)
+    {
+        object? v = value;
+        if (value is System.Text.Json.JsonElement je)
+            v = je.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.String => je.GetString(),
+                System.Text.Json.JsonValueKind.Number => je.TryGetInt32(out var i) ? (object)i : je.GetDouble(),
+                System.Text.Json.JsonValueKind.True   => true,
+                System.Text.Json.JsonValueKind.False  => false,
+                _ => je.ToString(),
+            };
+
+        if (key.Equals("FontSize", StringComparison.OrdinalIgnoreCase))
+        {
+            var font = item.GetType().GetProperty("Font")?.GetValue(item) as HmiFontPart
+                ?? throw new InvalidOperationException("item has no Font.");
+            font.Size = Convert.ToSingle(v, System.Globalization.CultureInfo.InvariantCulture);
+            return;
+        }
+        if (key.Equals("Text", StringComparison.OrdinalIgnoreCase) || key.Equals("AlternateText", StringComparison.OrdinalIgnoreCase))
+        { SetText(item, key, Convert.ToString(v) ?? ""); return; }
+
+        if (v is string s && s.StartsWith("#") && key.EndsWith("Color", StringComparison.OrdinalIgnoreCase))
+            v = System.Drawing.ColorTranslator.FromHtml(s);
+        else if (v is int n)
+        {
+            if (key is "Width" or "Height") v = (uint)n;
+            else if (key == "BorderWidth")  v = (byte)n;
+            else if (key == "Opacity")      v = (float)n;
+        }
+        item.SetAttribute(key, v);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     // Collect screens as summary objects (for listing)
@@ -263,3 +694,5 @@ public sealed class HmiScreenService
         throw new KeyNotFoundException($"No WinCC Unified HMI software found for device '{deviceName}'.");
     }
 }
+
+

@@ -47,6 +47,37 @@ public sealed record HmiTagCreateRequest
     public          bool   BindPlc  { get; init; }
 }
 
+public sealed record HmiScreenItemSpec
+{
+    /// <summary>text | iofield | button | rectangle | circle | toggleswitch</summary>
+    public required string Type { get; init; }
+    public required string Name { get; init; }
+    public int Left { get; init; }
+    public int Top { get; init; }
+    public uint Width { get; init; } = 100;
+    public uint Height { get; init; } = 30;
+    /// <summary>Caption for text / button / toggleswitch.</summary>
+    public string? Text { get; init; }
+    /// <summary>HMI tag shown/edited by an iofield.</summary>
+    public string? ProcessValue { get; init; }
+    /// <summary>JavaScript run when a button is tapped, e.g. Tags("BC_Pattern").Write(3);</summary>
+    public string? OnTap { get; init; }
+    /// <summary>"Input", "Output" or "InputOutput" for an iofield.</summary>
+    public string? IoType { get; init; }
+    /// <summary>Extra attributes applied with SetAttribute (string, number, bool). Errors are reported, not fatal.</summary>
+    public Dictionary<string, object?>? Attributes { get; init; }
+}
+
+public sealed record HmiScreenBuildRequest
+{
+    public bool Create { get; init; }
+    public uint? Width { get; init; }
+    public uint? Height { get; init; }
+    /// <summary>Delete every existing item on the screen first.</summary>
+    public bool Clear { get; init; }
+    public List<HmiScreenItemSpec> Items { get; init; } = new();
+}
+
 public sealed record FaceplateTagUpdate
 {
     public required string ContainerName  { get; init; }

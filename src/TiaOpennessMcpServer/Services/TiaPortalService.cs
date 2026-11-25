@@ -61,7 +61,15 @@ public sealed class TiaPortalService : IDisposable
             _log.LogInformation("{Count} TIA Portal process(es) found — attaching…", processes.Count);
 
             // Prefer the process whose project path matches, otherwise take the first one.
-            TiaPortalProcess targetProcess = processes[0];
+            // Several processes can exist (e.g. a stale one after a crash). Prefer one with a
+            // user interface, then the newest (highest Id), instead of the first listed.
+            TiaPortalProcess targetProcess = processes
+                .Cast<TiaPortalProcess>()
+                .OrderByDescending(p => p.Mode == TiaPortalMode.WithUserInterface)
+                .ThenByDescending(p => p.Id)
+                .First();
+            foreach (TiaPortalProcess p in processes)
+                _log.LogInformation("TIA process {Id} mode={Mode} project={Path}", p.Id, p.Mode, p.ProjectPath?.FullName);
             if (!string.IsNullOrWhiteSpace(projectPath))
             {
                 foreach (TiaPortalProcess p in processes)
