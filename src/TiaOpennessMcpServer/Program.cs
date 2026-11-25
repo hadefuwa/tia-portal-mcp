@@ -862,7 +862,23 @@ async Task<object?> McpDispatch(JsonElement p)
         case "list_blocks":            return await sw.ListBlocksAsync(A("device"));
         case "read_block":             return await sw.ReadBlockAsync(A("device"), A("block"));
         case "write_block_scl":        await sw.WriteBlockSclAsync(A("device"), A("block"), A("source")); return new { success = true };
-        case "import_block_xml":       await sw.WriteBlockXmlAsync(A("device"), A("block"), A("content")); return new { success = true };
+        case "import_block_xml":
+        {
+            // Large blocks (a 250 KB LAD block) cannot be passed as text in a tool call, so the XML may
+            // instead be read from a local .xml file given as "path".
+            var xmlPath = A("path");
+            var xml = A("content");
+            if (!string.IsNullOrWhiteSpace(xmlPath))
+            {
+                if (!string.Equals(Path.GetExtension(xmlPath), ".xml", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("path must point to a .xml file.");
+                if (!File.Exists(xmlPath))
+                    throw new FileNotFoundException("XML file not found: " + xmlPath);
+                xml = File.ReadAllText(xmlPath);
+            }
+            await sw.WriteBlockXmlAsync(A("device"), A("block"), xml);
+            return new { success = true };
+        }
         case "compile_block":          return new { result = await sw.CompileBlockAsync(A("device"), A("block")) };
         case "create_lad_block":
             return await sw.CreateLadBlockAsync(A("device"), new LadBlockRequest
@@ -1072,7 +1088,8 @@ List<object> McpToolDefs() => new()
     McpT("import_block_xml", "Imports raw SimaticML XML into a block. Use for LAD/FBD/STL blocks.",
         McpP("device",  "string", true, "Device name"),
         McpP("block",   "string", true, "Block name"),
-        McpP("content", "string", true, "Full SimaticML XML content")),
+        McpP("content", "string", false, "Full SimaticML XML content (use 'path' instead for large blocks)"),
+        McpP("path",    "string", false, "Alternative to content: full path of a local .xml file to import")),
     McpT("compile_block", "Compiles a block and returns compiler output with error line numbers.",
         McpP("device", "string", true, "Device name"),
         McpP("block",  "string", true, "Block name")),
