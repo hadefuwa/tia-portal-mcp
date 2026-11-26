@@ -137,6 +137,7 @@ var destructiveHintTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     "write_block_scl", "import_block_xml", "import_tag_table", "patch_block_texts",
     "batch_rename_tags", "update_faceplate_tags", "close_project", "relink_hmi_tags",
     "set_hmi_screen_item", "copy_hmi_screen_item", "dynamize_hmi_screen_item", "set_hmi_item_event_script",
+    "delete_block",
 };
 
 // --annotations (or TIA_MCP_ANNOTATIONS=1) adds MCP tool annotations to
@@ -879,6 +880,9 @@ async Task<object?> McpDispatch(JsonElement p)
             await sw.WriteBlockXmlAsync(A("device"), A("block"), xml);
             return new { success = true };
         }
+        case "delete_block":
+            if (!AB("confirm")) throw new ArgumentException("delete_block needs confirm: true (it cannot be undone without the project backup).");
+            await sw.DeleteBlockAsync(A("device"), A("block")); return new { deleted = A("block") };
         case "compile_block":          return new { result = await sw.CompileBlockAsync(A("device"), A("block")) };
         case "create_lad_block":
             return await sw.CreateLadBlockAsync(A("device"), new LadBlockRequest
@@ -1090,6 +1094,10 @@ List<object> McpToolDefs() => new()
         McpP("block",   "string", true, "Block name"),
         McpP("content", "string", false, "Full SimaticML XML content (use 'path' instead for large blocks)"),
         McpP("path",    "string", false, "Alternative to content: full path of a local .xml file to import")),
+    McpT("delete_block", "Deletes a program block (FB, FC, DB, OB) from a device. Does not check for callers: compile the software afterwards to see whether anything still uses it. Needs confirm:true.",
+        McpP("device",  "string",  true, "Device name"),
+        McpP("block",   "string",  true, "Block name"),
+        McpP("confirm", "boolean", true, "Must be true")),
     McpT("compile_block", "Compiles a block and returns compiler output with error line numbers.",
         McpP("device", "string", true, "Device name"),
         McpP("block",  "string", true, "Block name")),
