@@ -439,6 +439,18 @@ public sealed class SoftwareService
         if (string.IsNullOrWhiteSpace(xmlContent))
             throw new ArgumentException("XML content is empty.");
 
+        // The block name decides which folder (user group) the XML is imported into. Without it the
+        // import lands in the root "Program blocks" folder, and TIA refuses it with only a generic
+        // "Error when calling method 'Import'" whenever the block already lives in a sub-folder.
+        // So when no name is given, take it from the block's <Name> in the XML.
+        if (string.IsNullOrWhiteSpace(blockName))
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(xmlContent,
+                @"<SW\.Blocks\.\w+[^>]*>\s*<AttributeList>.*?<Name>([^<]+)</Name>",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+            if (m.Success) blockName = System.Net.WebUtility.HtmlDecode(m.Groups[1].Value.Trim());
+        }
+
         await _sta.RunAsync(() =>
         {
             var plc = GetPlcSoftware(deviceName);
