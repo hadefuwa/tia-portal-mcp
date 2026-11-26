@@ -446,8 +446,9 @@ public sealed class SoftwareService
             var importFile = Path.Combine(_opts.ExportDirectory,
                 $"{deviceName}_{blockName}_xml_edit.xml");
             File.WriteAllText(importFile, xmlContent);
-            FindBlockComposition(plc.BlockGroup, blockName)
-                .Import(new FileInfo(importFile), ImportOptions.Override);
+            ExceptionDetail.Wrap($"Import of '{blockName}' failed", () =>
+                FindBlockComposition(plc.BlockGroup, blockName)
+                    .Import(new FileInfo(importFile), ImportOptions.Override));
             _log.LogInformation("Imported raw XML for {Block} on {Device}.", blockName, deviceName);
         });
     }
@@ -461,7 +462,8 @@ public sealed class SoftwareService
         await _sta.RunAsync(() =>
         {
             var plc = GetPlcSoftware(deviceName);
-            plc.BlockGroup.Blocks.Import(new FileInfo(xmlFilePath), ImportOptions.Override);
+            ExceptionDetail.Wrap($"Import of '{Path.GetFileName(xmlFilePath)}' failed", () =>
+                plc.BlockGroup.Blocks.Import(new FileInfo(xmlFilePath), ImportOptions.Override));
             _log.LogInformation("Imported block from {Path} into {Device}.", xmlFilePath, deviceName);
         });
     }
