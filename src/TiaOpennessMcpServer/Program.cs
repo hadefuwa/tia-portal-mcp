@@ -75,7 +75,7 @@ var standardTools = new HashSet<string>(liteTools, StringComparer.OrdinalIgnoreC
     "list_hmi_screens", "get_screen_tag_refs", "update_faceplate_tags",
     "list_hmi_connections", "list_hmi_screen_items", "build_hmi_screen",
     "delete_hmi_screen", "delete_hmi_tags", "compile_hmi",
-    "check_hmi_layout", "bind_hmi_tag",
+    "check_hmi_layout", "bind_hmi_tag", "set_hmi_colour_map",
     "describe_object", "get_object_attributes",
 };
 
@@ -869,6 +869,9 @@ async Task<object?> McpDispatch(JsonElement p)
         case "download_hmi":         return await hmiScreenSvc.DownloadAsync(A("device"), A("pcInterface"), AObj<int?>("pcNumber") ?? 1, A("target"));
         case "check_hmi_layout":   return await hmiScreenSvc.CheckLayoutAsync(A("device"), A("screen"));
         case "bind_hmi_tag":         return await hmiScreenSvc.BindTagAsync(A("device"), A("screen"), A("item"), A("property"), A("tag"));
+        case "set_hmi_colour_map":
+            return await hmiScreenSvc.SetColourMapAsync(A("device"), A("screen"), A("item"), A("property"),
+                AList<HmiColourMapEntry>("entries").Select(e => (e.Value, e.Color)).ToList());
         case "delete_hmi_screen":    return await hmiScreenSvc.DeleteScreenAsync(A("device"), A("screen"));
         case "delete_hmi_tags":      return await hmiSvc.DeleteTagsAsync(A("device"), A("table"), AList<string>("names"));
         case "compile_hmi":          return await hmiScreenSvc.CompileHmiAsync(A("device"));
@@ -1127,6 +1130,14 @@ List<object> McpToolDefs() => new()
         McpP("item", "string", true, "Item name"),
         McpP("property", "string", true, "Property to dynamize, e.g. BackColor"),
         McpP("tag", "string", true, "HMI tag name")),
+    McpT("set_hmi_colour_map", "Fills the value-to-colour table of a tag dynamization made by bind_hmi_tag, so an item property (e.g. BackColor) follows the tag value: one Range entry per value (From=To). Replaces existing entries. Unverified on V19: save the project first.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen name"),
+        McpP("item", "string", true, "Item name"),
+        McpP("property", "string", true, "Dynamized property, e.g. BackColor"),
+        McpPArr("entries", true, "Value to colour entries",
+            McpP("value", "string", true, "Tag value, e.g. \"1\""),
+            McpP("color", "string", true, "Colour as #RRGGBB"))),
     McpT("build_hmi_screen",
         "Creates (create:true) or fills a WinCC Unified HMI screen. clear:true deletes the screen's existing items first. "
       + "Item types: iofield, textbox, button, rectangle, circle, toggleswitch, or any widget class name (e.g. Slider). "

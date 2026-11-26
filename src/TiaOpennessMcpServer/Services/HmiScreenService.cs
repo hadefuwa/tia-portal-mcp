@@ -316,6 +316,120 @@ public sealed class HmiScreenService
         });
     }
 
+    private static void BindTagOnItem(HmiScreenItemBase item, string property, string tagName)
+    {
+        var comp = item.GetType().GetProperty("Dynamizations")?.GetValue(item)
+            ?? throw new NotSupportedException($"{item.GetType().Name} has no Dynamizations.");
+        var dynType = typeof(HmiScreenItemBase).Assembly.GetTypes()
+            .FirstOrDefault(t => t.Name == "TagDynamization" && !t.IsAbstract)
+            ?? throw new NotSupportedException("TagDynamization type not found in this Openness version.");
+        var create = comp.GetType().GetMethods()
+            .FirstOrDefault(m => m.Name == "Create" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1)
+            ?? throw new NotSupportedException("Dynamizations has no generic Create.");
+        var dyn = create.MakeGenericMethod(dynType).Invoke(comp, new object[] { property })
+            ?? throw new InvalidOperationException("Create returned null.");
+        dynType.GetProperty("Tag")!.SetValue(dyn, tagName);
+    }
+
+    // ── Value-to-colour map on an existing tag dynamization ───────────────────
+
+    /// <summary>Fills the MappingTable of an existing TagDynamization (see BindTagAsync) with one Range entry per
+    /// value (From = To = value), so the property takes the matching value, e.g. a colour. Existing entries are
+    /// replaced. Created via reflection on the generic Entries.Create&lt;MappingTableEntryRange&gt;(). UNVERIFIED on V19.</summary>
+    public async Task<object> SetColourMapAsync(string deviceName, string screenName, string itemName, string property,
+        List<(string Value, string Color)> entries)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+          try
+          {
+            var hmi = GetHmiSoftware(deviceName);
+            var screen = FindScreen(hmi, screenName)
+                ?? throw new KeyNotFoundException($"HMI screen '{screenName}' not found.");
+            HmiScreenItemBase? item = null;
+            foreach (HmiScreenItemBase i in screen.ScreenItems)
+                if (i.Name.Equals(itemName, StringComparison.OrdinalIgnoreCase)) { item = i; break; }
+            if (item is null) throw new KeyNotFoundException($"Item '{itemName}' not found on '{screenName}'.");
+
+            var comp = item.GetType().GetProperty("Dynamizations")?.GetValue(item)
+                ?? throw new NotSupportedException($"{item.GetType().Name} has no Dynamizations.");
+            object? dyn = null;
+            foreach (var d in (System.Collections.IEnumerable)comp)
+                if (d.GetType().Name == "TagDynamization"
+                    && string.Equals(d.GetType().GetProperty("PropertyName")?.GetValue(d)?.ToString(), property, StringComparison.OrdinalIgnoreCase))
+                { dyn = d; break; }
+            if (dyn is null) throw new KeyNotFoundException($"No tag dynamization on {itemName}.{property}. Run bind_hmi_tag first.");
+
+            var conv = dyn.GetType().GetProperty("ValueConverter")?.GetValue(dyn)
+                ?? throw new NotSupportedException("TagDynamization has no ValueConverter.");
+            var table = conv.GetType().GetProperty("MappingTable")?.GetValue(conv)
+                ?? throw new NotSupportedException("ValueConverter has no MappingTable.");
+            var condProp = table.GetType().GetProperty("ConditionType")
+                ?? throw new NotSupportedException("MappingTable has no ConditionType.");
+            var entryComp = table.GetType().GetProperty("Entries")?.GetValue(table)
+                ?? throw new NotSupportedException("MappingTable has no Entries.");
+
+            var entryType = typeof(HmiScreenItemBase).Assembly.GetTypes()
+                .FirstOrDefault(t => t.Name == "MappingTableEntryRange" && !t.IsAbstract)
+                ?? throw new NotSupportedException("MappingTableEntryRange type not found in this Openness version.");
+            var create = entryComp.GetType().GetMethods()
+                .FirstOrDefault(m => m.Name == "Create" && m.IsGenericMethodDefinition && m.GetParameters().Length == 0)
+                ?? throw new NotSupportedException("Entries has no parameterless generic Create.");
+
+            // Replace any existing entries.
+            foreach (var old in ((System.Collections.IEnumerable)entryComp).Cast<object>().ToList())
+                old.GetType().GetMethod("Delete")?.Invoke(old, null);
+
+            condProp.SetValue(table, Enum.Parse(condProp.PropertyType, "Range"));
+
+            object Conv(object target, string prop, string raw)
+            {
+                var pt = (target.GetType().GetProperty(prop) ?? throw new NotSupportedException($"No property {prop}.")).PropertyType;
+                if (pt == typeof(System.Drawing.Color)) return System.Drawing.ColorTranslator.FromHtml(raw);
+                if (pt == typeof(object))
+                    return raw.StartsWith("#") ? System.Drawing.ColorTranslator.FromHtml(raw)
+                         : double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var dv) ? dv : raw;
+                if (pt.IsEnum) return Enum.Parse(pt, raw);
+                return System.Convert.ChangeType(raw, pt, System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            var done = new List<object>();
+            foreach (var (value, color) in entries)
+            {
+                var entry = create.MakeGenericMethod(entryType).Invoke(entryComp, null)
+                    ?? throw new InvalidOperationException("Create returned null.");
+                // From/To/Value are typed object: TIA rejects some CLR types, so try the likely ones in turn.
+                void SetAny(string prop, params object[] candidates)
+                {
+                    var pi = entryType.GetProperty(prop)!;
+                    var errs = new List<string>();
+                    foreach (var c in candidates)
+                    {
+                        try { pi.SetValue(entry, c); return; }
+                        catch (System.Reflection.TargetInvocationException ex)
+                        { errs.Add($"{c.GetType().Name}: {ex.InnerException?.Message}"); }
+                    }
+                    throw new InvalidOperationException($"Could not set {prop}={candidates[0]}. Tried " + string.Join(" | ", errs));
+                }
+                var num = double.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+                SetAny("From", (int)num, (uint)num, (byte)num, num, value);
+                SetAny("To", (int)num, (uint)num, (byte)num, num, value);
+                var rt = entryType.GetProperty("RangeType");
+                if (rt is not null && rt.CanWrite) rt.SetValue(entry, Enum.Parse(rt.PropertyType, "Range"));
+                SetAny("Value", System.Drawing.ColorTranslator.FromHtml(color), color);
+                done.Add(new { value, color });
+            }
+            return (object)new { item = itemName, property, status = "mapped", entries = done };
+          }
+          catch (System.Reflection.TargetInvocationException tie)
+          {
+              var inner = tie.InnerException;
+              throw new InvalidOperationException((inner?.GetType().Name ?? "Error") + ": " + (inner?.Message ?? tie.Message), inner);
+          }
+        });
+    }
+
     // ── Download probe (read only) ────────────────────────────────────────────
 
     /// <summary>Checks whether the HMI device item offers a DownloadProvider and lists the connection modes,
@@ -492,7 +606,8 @@ public sealed class HmiScreenService
                     if (spec.Text is not null)
                         Try(errors, "Text", () => SetText(item, "Text", spec.Text));
                     if (spec.ProcessValue is not null)
-                        Try(errors, "ProcessValue", () => item.SetAttribute("ProcessValue", spec.ProcessValue));
+                        // A static SetAttribute only writes text; TIA needs a Tag dynamization to link the HMI tag.
+                        Try(errors, "ProcessValue", () => BindTagOnItem(item, "ProcessValue", spec.ProcessValue));
                     if (spec.IoType is not null && item is HmiIOField io)
                         Try(errors, "IOFieldType", () =>
                             io.IOFieldType = (HmiIOFieldType)Enum.Parse(typeof(HmiIOFieldType), spec.IoType, true));

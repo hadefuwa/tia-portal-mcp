@@ -78,6 +78,14 @@ public sealed record HmiScreenBuildRequest
     public List<HmiScreenItemSpec> Items { get; init; } = new();
 }
 
+public sealed record HmiColourMapEntry
+{
+    /// <summary>Tag value that selects this entry, e.g. "1".</summary>
+    public required string Value { get; init; }
+    /// <summary>Property value for that tag value, e.g. a colour "#FF0000".</summary>
+    public required string Color { get; init; }
+}
+
 public sealed record FaceplateTagUpdate
 {
     public required string ContainerName  { get; init; }
