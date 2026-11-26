@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tia-portal": {
+      "command": "src/TiaOpennessMcpServer/bin/Release/net48/TiaPortalDashboard.exe",
+      "args": ["--mcp-stdio"]
+    }
+  }
+}

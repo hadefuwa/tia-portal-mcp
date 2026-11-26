@@ -9,7 +9,7 @@ Project-level guidance for Claude Code working in this repo.
 A .NET Framework 4.8 app that exposes TIA Portal V20 as an MCP server. Two transports:
 
 - **HTTP** — dashboard window running at `http://localhost:5000`. Used by Claude Desktop (via Custom Connectors UI) and direct REST calls.
-- **stdio** — headless mode (`--mcp-stdio` flag). Used by Claude Code, Cursor, VS Code Copilot. The `.mcp.json` at `~/.claude/.mcp.json` points to the exe with this flag.
+- **stdio** — headless mode (`--mcp-stdio` flag). Used by Claude Code, Cursor, VS Code Copilot. The repo-root `.mcp.json` points to the exe with this flag.
 
 Both transports share the same `HandleMcpRequest` method in `Program.cs`.
 
@@ -141,7 +141,7 @@ GlobalDB member declarations live in `<AttributeList> > <Interface> > <Sections>
 
 ## Claude Code `.mcp.json`
 
-MCP server config for Claude Code lives at `~/.claude/.mcp.json` (not `settings.json`, which has no `mcpServers` field):
+Claude Code reads MCP servers only at session start, from a project `.mcp.json`, `~/.claude.json` or `claude mcp add`. It does NOT read `~/.claude/.mcp.json` (an earlier version of this file said it did, which is why the tools never loaded). This repo ships a root `.mcp.json` using stdio with a relative exe path, so opening Claude Code in the repo is enough; approve the project server on first use and rebuild first so the exe exists. For the running dashboard instead: `claude mcp add --transport http tia-portal --scope user http://localhost:5000/mcp`. Do not enable both (duplicate tools).
 
 ```json
 {
