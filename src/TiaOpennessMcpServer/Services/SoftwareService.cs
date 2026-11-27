@@ -208,6 +208,62 @@ public sealed class SoftwareService
         });
     }
 
+    // ── Watch tables ──────────────────────────────────────────────────────────
+    // Creates (or replaces) a watch table in the PLC's "Watch and force tables" folder. Each entry is a
+    // symbolic tag (e.g. "Robot_DB".IO.Commands.Pickup_Position) with an optional modify value, which is
+    // only prepared: the user still goes online and clicks "Modify" in TIA, nothing is written to the PLC here.
+
+    public sealed record WatchEntry(string Tag, string? ModifyValue);
+    public sealed record WatchTableRequest(string Name, List<WatchEntry> Entries);
+
+    public async Task<int> CreateWatchTableAsync(string deviceName, string tableName, IReadOnlyList<WatchEntry> entries)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var plc   = GetPlcSoftware(deviceName);
+            var group = plc.WatchAndForceTableGroup;
+            var old   = group.WatchTables.Find(tableName);
+            if (old is not null) old.Delete();
+            // Openness has no way to add a watch row in code (Entries.Create() only makes comment rows and the row
+            // properties are read-only), so: create an empty table, export it, add the rows to the XML, re-import.
+            var table = group.WatchTables.Create(tableName);
+            Directory.CreateDirectory(_opts.ExportDirectory);
+            var file = Path.Combine(_opts.ExportDirectory, $"watchtable_{deviceName}_{tableName}.xml");
+            if (File.Exists(file)) File.Delete(file);
+            table.Export(new FileInfo(file), ExportOptions.WithDefaults);
+
+            var doc = System.Xml.Linq.XDocument.Load(file);
+            var tableEl = doc.Descendants().First(x => x.Name.LocalName == "SW.WatchAndForceTables.PlcWatchTable");
+            var list = tableEl.Elements().FirstOrDefault(x => x.Name.LocalName == "ObjectList");
+            if (list is null) { list = new System.Xml.Linq.XElement("ObjectList"); tableEl.Add(list); }
+            var id = doc.Descendants().Select(x => (string?)x.Attribute("ID"))
+                        .Where(v => v is not null)
+                        .Select(v => int.TryParse(v, System.Globalization.NumberStyles.HexNumber, null, out var n) ? n : 0)
+                        .DefaultIfEmpty(0).Max() + 1;
+            foreach (var e in entries)
+            {
+                var attrs = new System.Xml.Linq.XElement("AttributeList",
+                    new System.Xml.Linq.XElement("Name", e.Tag));
+                if (!string.IsNullOrWhiteSpace(e.ModifyValue))
+                {
+                    attrs.Add(new System.Xml.Linq.XElement("ModifyIntention", "true"));
+                    attrs.Add(new System.Xml.Linq.XElement("ModifyValue", e.ModifyValue));
+                }
+                list.Add(new System.Xml.Linq.XElement("SW.WatchAndForceTables.PlcWatchTableEntry",
+                    new System.Xml.Linq.XAttribute("ID", (id++).ToString("X")),
+                    new System.Xml.Linq.XAttribute("CompositionName", "Entries"),
+                    attrs));
+            }
+            doc.Save(file);
+            table.Delete();
+            ExceptionDetail.Wrap($"Watch table import of '{tableName}' failed (XML kept at {file})", () =>
+                group.WatchTables.Import(new FileInfo(file), ImportOptions.Override));
+            _log.LogInformation("Created watch table {Table} ({Count} entries) on {Device}.", tableName, entries.Count, deviceName);
+            return entries.Count;
+        });
+    }
+
     // ── Compile ───────────────────────────────────────────────────────────────
 
     public async Task<string> CompileBlockAsync(string deviceName, string blockName)

@@ -111,6 +111,7 @@ var standardTools = new HashSet<string>(liteTools, StringComparer.OrdinalIgnoreC
     "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags", "create_hmi_tags", "relink_hmi_tags",
     "list_hmi_screens", "get_screen_tag_refs", "update_faceplate_tags",
     "read_hmi_screen", "set_hmi_screen_item", "copy_hmi_screen_item", "dynamize_hmi_screen_item", "set_hmi_item_event_script", "save_project_as",
+    "describe_hmi_item_type", "create_hmi_screen", "build_hmi_screen_from_map",
 };
 
 // readonly = look, never edit. Opt-in (--profile readonly); the default profile
@@ -123,7 +124,7 @@ var readonlyTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     "list_tag_tables", "get_tags", "get_device", "get_io_mapping",
     "get_project_signature", "get_block_attributes", "get_option_packages",
     "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags",
-    "list_hmi_screens", "get_screen_tag_refs", "read_hmi_screen",
+    "list_hmi_screens", "get_screen_tag_refs", "read_hmi_screen", "describe_hmi_item_type",
 };
 
 // Tools that only read the project. Used for the MCP readOnlyHint annotation.
@@ -165,6 +166,7 @@ services.AddSingleton<TagService>();
 services.AddSingleton<HmiTagService>();
 services.AddSingleton<HmiScreenService>();
 services.AddSingleton<HmiScreenEditService>();
+services.AddSingleton<HmiScreenBuildService>();
 
 var sp      = services.BuildServiceProvider();
 
@@ -188,6 +190,7 @@ var tagSvc  = sp.GetRequiredService<TagService>();
 var hmiSvc      = sp.GetRequiredService<HmiTagService>();
 var hmiScreenSvc = sp.GetRequiredService<HmiScreenService>();
 var hmiEditSvc   = sp.GetRequiredService<HmiScreenEditService>();
+var hmiBuildSvc  = sp.GetRequiredService<HmiScreenBuildService>();
 
 var mcpLog  = new List<McpLogEntry>();
 var mcpLock = new object();
@@ -390,6 +393,19 @@ async Task HandleAsync(HttpListenerContext ctx)
         else if (method == "POST" && TryMatch(path, "/api/devices/{device}/blocks/{block}/compile", out m))
         {
             try   { await Json(res, new { result = await sw.CompileBlockAsync(m["device"], m["block"]) }); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── Watch table create ────────────────────────────────────────────────
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/watchtables", out m))
+        {
+            try
+            {
+                var body = await ReadJson<SoftwareService.WatchTableRequest>(req)
+                           ?? throw new ArgumentException("Body needs { name, entries: [ { tag, modifyValue } ] }.");
+                var n = await sw.CreateWatchTableAsync(m["device"], body.Name, body.Entries);
+                await Json(res, new { success = true, entries = n });
+            }
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
@@ -880,6 +896,9 @@ async Task<object?> McpDispatch(JsonElement p)
             await sw.WriteBlockXmlAsync(A("device"), A("block"), xml);
             return new { success = true };
         }
+        case "create_watch_table":
+            return new { entries = await sw.CreateWatchTableAsync(A("device"), A("name"),
+                AList<SoftwareService.WatchEntry>("entries")) };
         case "delete_block":
             if (!AB("confirm")) throw new ArgumentException("delete_block needs confirm: true (it cannot be undone without the project backup).");
             await sw.DeleteBlockAsync(A("device"), A("block")); return new { deleted = A("block") };
@@ -986,6 +1005,21 @@ async Task<object?> McpDispatch(JsonElement p)
             if (!dry) RequireConfirm();
             return await hmiEditSvc.SetEventScriptAsync(A("device"), A("screen"), A("item"),
                 A("eventType"), A("scriptCode"), dry);
+        }
+        case "describe_hmi_item_type":
+            return hmiBuildSvc.DescribeItemType(AN("typeName"));
+        case "create_hmi_screen":
+        {
+            bool dry = AB("dryRun");
+            if (!dry) RequireConfirm();
+            return await hmiBuildSvc.CreateScreenAsync(A("device"), A("name"), AIN("width") ?? 652, AIN("height") ?? 482, AN("backColor"), dry);
+        }
+        case "build_hmi_screen_from_map":
+        {
+            bool dry = AB("dryRun");
+            if (!dry) RequireConfirm();
+            return await hmiBuildSvc.BuildFromMapAsync(A("device"), A("screen"), A("mapPath"), AObj<List<int>>("phases"),
+                AObj<List<string>>("only"), AB("replaceExisting"), dry);
         }
         case "save_project_as":
             RequireConfirm();
@@ -1094,7 +1128,11 @@ List<object> McpToolDefs() => new()
         McpP("block",   "string", true, "Block name"),
         McpP("content", "string", false, "Full SimaticML XML content (use 'path' instead for large blocks)"),
         McpP("path",    "string", false, "Alternative to content: full path of a local .xml file to import")),
-    McpT("delete_block", "Deletes a program block (FB, FC, DB, OB) from a device. Does not check for callers: compile the software afterwards to see whether anything still uses it. Needs confirm:true.",
+    McpT("create_watch_table", "Creates (or replaces) a PLC watch table. entries: [{tag, modifyValue?}], tag symbolic e.g. \"Robot_DB\".IO.Commands.Pickup_Position. Modify values are only prepared; the user goes online and clicks Modify in TIA.",
+        McpP("device",  "string", true, "PLC device name"),
+        McpP("name",    "string", true, "Watch table name"),
+        McpP("entries", "array",  true, "List of {tag, modifyValue}")),
+    McpT("delete_block","Deletes a program block (FB, FC, DB, OB) from a device. Does not check for callers: compile the software afterwards to see whether anything still uses it. Needs confirm:true.",
         McpP("device",  "string",  true, "Device name"),
         McpP("block",   "string",  true, "Block name"),
         McpP("confirm", "boolean", true, "Must be true")),
@@ -1250,6 +1288,32 @@ List<object> McpToolDefs() => new()
         McpP("outputFormat", "string", false, "Number format, e.g. {0:d} or {0:F2}"),
         McpP("visibilityExpression", "string", false, "Expression for the Visible property"),
         McpP("dryRun", "boolean", false, "true = report only, write nothing"),
+        McpP("confirm", "boolean", false, "Must be true for a real run")),
+    McpT("describe_hmi_item_type",
+        "Lists the WinCC Unified screen item types (no typeName) or the public properties of one type (name, type, writable, enum values, "
+      + "part objects such as Font). Pure reflection over the Openness API; reads nothing from the project.",
+        McpP("typeName", "string", false, "e.g. HmiRectangle, HmiCircle, HmiLine, HmiPolyline, HmiText")),
+    McpT("create_hmi_screen",
+        "Creates a NEW empty WinCC Unified screen (refuses if the name exists; never edits an existing screen). dryRun previews; a real run needs confirm:true.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("name", "string", true, "New screen name"),
+        McpP("width", "integer", false, "Width in px (default 652)"),
+        McpP("height", "integer", false, "Height in px (default 482)"),
+        McpP("backColor", "string", false, "Background colour #RRGGBB"),
+        McpP("dryRun", "boolean", false, "true = report only"),
+        McpP("confirm", "boolean", false, "Must be true for a real run")),
+    McpT("build_hmi_screen_from_map",
+        "Builds screen items from a JSON layout map (objects: name, type, phase, rect [L,T,W,H], points, style, text, bind [{property, expr, tags}], events). "
+      + "Refuses a screen that holds any item not named in the map. Existing map items are skipped unless replaceExisting. Simple Visible<-T('tag') "
+      + "becomes a tag dynamization, other bindings script dynamizations triggered by their tags. Reports applied/notApplied per item. "
+      + "dryRun previews; a real run needs confirm:true.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Target screen (created with create_hmi_screen)"),
+        McpP("mapPath", "string", true, "Full path of the layout-map JSON file"),
+        McpPArrOf("phases", "integer", false, "Only objects in these phases (default all)"),
+        McpPArrOf("only", "string", false, "Only these object names (e.g. to test one of each type)"),
+        McpP("replaceExisting", "boolean", false, "Delete and rebuild map items that already exist"),
+        McpP("dryRun", "boolean", false, "true = report only"),
         McpP("confirm", "boolean", false, "Must be true for a real run")),
     McpT("copy_hmi_screen_item",
         "Duplicates an item on the same screen under a new name (properties and dynamizations are copied; event scripts are "
