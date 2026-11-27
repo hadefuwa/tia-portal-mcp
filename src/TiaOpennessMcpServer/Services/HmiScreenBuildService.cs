@@ -214,8 +214,8 @@ public sealed class HmiScreenBuildService
         if (hasLT && type != "HmiCircle" && type != "HmiEllipse")
         {
             TrySet(item, "Left", L, applied, notApplied); TrySet(item, "Top", T, applied, notApplied);
-            if (type != "HmiLine" && type != "HmiPolyline" && type != "HmiPolygon")
-            { TrySet(item, "Width", W, applied, notApplied); TrySet(item, "Height", H, applied, notApplied); }
+            // Point-based shapes too: their drawing box is Width x Height (a new line defaults to 96 wide).
+            TrySet(item, "Width", Math.Max(1, W), applied, notApplied); TrySet(item, "Height", Math.Max(1, H), applied, notApplied);
         }
         if (!o.TryGetProperty("points", out var pts)) return;
         var points = pts.EnumerateArray().Select(p => p.EnumerateArray().Select(v => v.GetInt32()).ToArray()).ToList();
@@ -243,10 +243,19 @@ public sealed class HmiScreenBuildService
             var createPt = comp.GetType().GetMethods().Where(m => m.Name == "Create" && !m.IsGenericMethod)
                 .OrderBy(m => m.GetParameters().Length).FirstOrDefault()
                 ?? throw new InvalidOperationException("Points has no Create method");
-            // Remove default points the type may start with.
-            foreach (var old in ((System.Collections.IEnumerable)comp).Cast<object>().ToList())
-                try { old.GetType().GetMethod("Delete")?.Invoke(old, null); } catch { }
-            foreach (var p in points)
+            // New polylines/polygons start with default points: reuse them for the first coordinates,
+            // create the rest, and delete any surplus (Delete is an interface method on HmiPoint).
+            var existingPts = ((System.Collections.IEnumerable)comp).Cast<object>().ToList();
+            for (int i = 0; i < Math.Min(existingPts.Count, points.Count); i++)
+            { SetProp(existingPts[i], "X", points[i][0] - ox); SetProp(existingPts[i], "Y", points[i][1] - oy); }
+            for (int i = points.Count; i < existingPts.Count; i++)
+            {
+                var del = existingPts[i].GetType().GetMethod("Delete")
+                          ?? existingPts[i].GetType().GetInterfaces().SelectMany(x => x.GetMethods()).FirstOrDefault(m => m.Name == "Delete" && m.GetParameters().Length == 0);
+                if (del == null) throw new InvalidOperationException("surplus default point cannot be deleted");
+                del.Invoke(existingPts[i], null);
+            }
+            foreach (var p in points.Skip(existingPts.Count))
             {
                 var ps = createPt.GetParameters();
                 object pt = ps.Length switch
@@ -257,6 +266,24 @@ public sealed class HmiScreenBuildService
                 };
                 if (ps.Length == 0) { SetProp(pt, "X", p[0] - ox); SetProp(pt, "Y", p[1] - oy); }
             }
+            // TIA re-normalises the shape while points are added one by one, which can move earlier points:
+            // write every point again now that all exist, then restore the box.
+            // Order matters: restore the box FIRST (changing Width/Height rescales existing points), then write the
+            // points twice so a re-normalisation triggered by one point cannot leave another one moved.
+            var all = ((System.Collections.IEnumerable)comp).Cast<object>().ToList();
+            if (hasLT)
+            {
+                SetProp(item, "Left", L); SetProp(item, "Top", T);
+                SetProp(item, "Width", (uint)Math.Max(1, W)); SetProp(item, "Height", (uint)Math.Max(1, H));
+            }
+            for (int pass = 0; pass < 2; pass++)
+                for (int i = 0; i < Math.Min(all.Count, points.Count); i++)
+                { SetProp(all[i], "X", points[i][0] - ox); SetProp(all[i], "Y", points[i][1] - oy); }
+            var bad = new List<string>();
+            for (int i = 0; i < Math.Min(all.Count, points.Count); i++)
+                if (Convert.ToInt32(Get(all[i], "X")) != points[i][0] - ox || Convert.ToInt32(Get(all[i], "Y")) != points[i][1] - oy)
+                    bad.Add($"[{i}]=({Get(all[i], "X")},{Get(all[i], "Y")})");
+            if (bad.Count > 0) notApplied.Add("Points read back differently: " + string.Join(" ", bad));
             applied.Add($"Points[{points.Count}] ({(hasLT ? "relative to Left/Top" : "absolute")})");
         }
         catch (Exception ex) { notApplied.Add("Points: " + First(ex)); }
@@ -374,8 +401,27 @@ public sealed class HmiScreenBuildService
     private static void ApplyMove(HmiScreenItemBase item, JsonElement o, JsonElement mv, List<string> applied, List<string> notApplied)
     {
         var part = Get(item, "LinearMovement");
-        if (part == null) { notApplied.Add("move: no LinearMovement part"); return; }
         var r = o.GetProperty("rect").EnumerateArray().Select(x => x.GetInt32()).ToArray();
+        if (part == null)
+        {
+            // V21 Openness leaves LinearMovement null on new items: fall back to tag-triggered Top/Left scripts.
+            var tag = mv.GetProperty("tag").GetString()!;
+            double a = mv.GetProperty("start").GetDouble(), z = mv.GetProperty("end").GetDouble();
+            var frac = $"var v = Tags('{tag}').Read(); var f = {z.ToString(CultureInfo.InvariantCulture)} === {a.ToString(CultureInfo.InvariantCulture)} ? 0 : (v - ({a.ToString(CultureInfo.InvariantCulture)})) / ({(z - a).ToString(CultureInfo.InvariantCulture)}); f = Math.max(0, Math.min(1, f)); ";
+            foreach (var (prop, key, baseVal) in new[] { ("Top", "dy", r[1]), ("Left", "dx", r[0]) })
+            {
+                if (!mv.TryGetProperty(key, out var d) || d.GetInt32() == 0) continue;
+                try
+                {
+                    var sd = item.Dynamizations.Find(prop) as ScriptDynamization ?? item.Dynamizations.Create<ScriptDynamization>(prop);
+                    sd.ScriptCode = frac + $"return Math.round({baseVal} + f * {d.GetInt32()});";
+                    try { sd.Trigger.Tags = new[] { tag }; sd.Trigger.Type = TriggerType.Tags; } catch { }
+                    applied.Add($"{prop}<-script move [{tag}]");
+                }
+                catch (Exception ex) { notApplied.Add($"move {prop}: {First(ex)}"); }
+            }
+            return;
+        }
         var sub = new List<string>(); var bad = new List<string>();
         SetAny(part, new[] { "Tag" }, mv.GetProperty("tag").GetString()!, sub, bad);
         SetAny(part, new[] { "TagRangeStart" }, mv.GetProperty("start").GetDouble(), sub, bad);
@@ -466,6 +512,9 @@ public sealed class HmiScreenBuildService
                  ?? throw new InvalidOperationException($"{item.GetType().Name} has no multilingual property '{prop}'.");
         var items = mt.Items.Cast<MultilingualTextItem>().ToList();
         if (items.Count == 0) throw new InvalidOperationException($"'{prop}' has no language entries to write.");
+        // Unified texts are rich text: wrap plain text as <body><p>..</p></body> (plain text is rejected).
+        if (!text.TrimStart().StartsWith("<body", StringComparison.OrdinalIgnoreCase))
+            text = "<body><p>" + System.Security.SecurityElement.Escape(text) + "</p></body>";
         foreach (var i in items) i.Text = text;   // a new item: same text in every project language
     }
 
