@@ -14,27 +14,8 @@ using TiaOpennessMcpServer.Services;
 using TiaOpennessMcpServer.Utilities;
 
 // ── Assembly resolver — must run before any Siemens type is referenced ────────
-// TIA Portal's Openness API is version-locked: the assemblies are strongly
-// named per major version (and V21 renamed/split them — see the .csproj
-// comment on TiaVersion), so a build compiled against V20 can only ever load
-// V20's DLLs, and a build compiled against V21 only V21's. TIA_VERSION below
-// is baked in at compile time by the TiaVersion MSBuild property.
-#if TIA_V21
-const string TiaVersion = "V21";
-#else
-const string TiaVersion = "V20";
-#endif
-const string automationRoot = @"C:\Program Files\Siemens\Automation";
-
-string[] TiaSearchPaths =
-{
-    Path.Combine(automationRoot, $"Portal {TiaVersion}", "PublicAPI", TiaVersion, "net48"),
-    Path.Combine(automationRoot, $"Portal {TiaVersion}", "PublicAPI", TiaVersion),
-    Path.Combine(automationRoot, $"Portal {TiaVersion}", "Bin", "PublicAPI"),
-    Path.Combine(automationRoot, $"Portal {TiaVersion}", "Bin", "PublicAPI", "Client"),
-    Path.Combine(automationRoot, $"Portal {TiaVersion}", "Bin"),
-};
-
+string[] TiaSearchPaths = TiaVersion.SearchPaths;
+LadXmlBuilder.EngineeringVersion = TiaVersion.Name;
 AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
 {
     var n = new AssemblyName(e.Name).Name!;
@@ -110,6 +91,10 @@ var standardTools = new HashSet<string>(liteTools, StringComparer.OrdinalIgnoreC
     "get_device", "get_io_mapping",
     "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags", "create_hmi_tags", "relink_hmi_tags",
     "list_hmi_screens", "get_screen_tag_refs", "update_faceplate_tags",
+    "list_hmi_connections", "list_hmi_screen_items", "build_hmi_screen",
+    "delete_hmi_screen", "delete_hmi_tags", "compile_hmi",
+    "check_hmi_layout", "bind_hmi_tag", "set_hmi_colour_map", "set_hmi_screen_script",
+    "describe_object", "get_object_attributes",
     "read_hmi_screen", "set_hmi_screen_item", "copy_hmi_screen_item", "dynamize_hmi_screen_item", "set_hmi_item_event_script", "save_project_as",
     "describe_hmi_item_type", "create_hmi_screen", "build_hmi_screen_from_map",
 };
@@ -125,17 +110,21 @@ var readonlyTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     "get_project_signature", "get_block_attributes", "get_option_packages",
     "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags",
     "list_hmi_screens", "get_screen_tag_refs", "read_hmi_screen", "describe_hmi_item_type",
+    "list_hmi_connections", "list_hmi_screen_items", "compile_hmi", "check_hmi_layout",
+    "describe_object", "get_object_attributes",
 };
 
 // Tools that only read the project. Used for the MCP readOnlyHint annotation.
 var readOnlyHintTools = new HashSet<string>(readonlyTools, StringComparer.OrdinalIgnoreCase);
-readOnlyHintTools.ExceptWith(new[] { "connect_to_tia_portal", "compile_block" });
+readOnlyHintTools.ExceptWith(new[] { "connect_to_tia_portal", "compile_block", "compile_hmi" });
 readOnlyHintTools.UnionWith(new[] { "export_block", "export_tag_table" }); // write files, not the project
 
 // Tools that overwrite existing project content. Used for destructiveHint.
 var destructiveHintTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
     "write_block_scl", "import_block_xml", "import_tag_table", "patch_block_texts",
+    "batch_rename_tags", "update_faceplate_tags", "close_project",
+    "delete_hmi_screen", "delete_hmi_tags", "set_object_attributes", "delete_object",
     "batch_rename_tags", "update_faceplate_tags", "close_project", "relink_hmi_tags",
     "set_hmi_screen_item", "copy_hmi_screen_item", "dynamize_hmi_screen_item", "set_hmi_item_event_script",
     "delete_block",
@@ -165,6 +154,7 @@ services.AddSingleton<SclAnalyzerService>();
 services.AddSingleton<TagService>();
 services.AddSingleton<HmiTagService>();
 services.AddSingleton<HmiScreenService>();
+services.AddSingleton<ObjectBrowserService>();
 services.AddSingleton<HmiScreenEditService>();
 services.AddSingleton<HmiScreenBuildService>();
 
@@ -173,12 +163,12 @@ var sp      = services.BuildServiceProvider();
 {
     var startupLog = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
     var runningVersions = DetectRunningPortalVersions();
-    if (runningVersions.Length > 0 && !runningVersions.Contains(TiaVersion))
+    if (runningVersions.Length > 0 && !runningVersions.Contains(TiaVersion.Name))
     {
         startupLog.LogWarning(
             "This server was built for TIA Portal {Built}, but the running instance is {Running}. " +
-            "Rebuild with -p:TiaVersion={RunningAgain} (see TiaOpennessMcpServer.csproj) or open TIA Portal {BuiltAgain} instead.",
-            TiaVersion, string.Join(", ", runningVersions), string.Join(", ", runningVersions), TiaVersion);
+            "Rebuild for {RunningAgain} with -p:TiaVersion=19|20|21 (see TiaOpennessMcpServer.csproj) or open TIA Portal {BuiltAgain} instead.",
+            TiaVersion.Name, string.Join(", ", runningVersions), string.Join(", ", runningVersions), TiaVersion.Name);
     }
 }
 
@@ -189,6 +179,7 @@ var scl     = sp.GetRequiredService<SclAnalyzerService>();
 var tagSvc  = sp.GetRequiredService<TagService>();
 var hmiSvc      = sp.GetRequiredService<HmiTagService>();
 var hmiScreenSvc = sp.GetRequiredService<HmiScreenService>();
+var objSvc       = sp.GetRequiredService<ObjectBrowserService>();
 var hmiEditSvc   = sp.GetRequiredService<HmiScreenEditService>();
 var hmiBuildSvc  = sp.GetRequiredService<HmiScreenBuildService>();
 
@@ -590,6 +581,37 @@ async Task HandleAsync(HttpListenerContext ctx)
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
+        // ── HMI connections — list ────────────────────────────────────────────
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/hmi/connections", out m))
+        {
+            try   { await Json(res, await hmiScreenSvc.ListConnectionsAsync(m["device"])); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── HMI tags — delete by name ─────────────────────────────────────────
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/hmi/tags/{table}/delete", out m))
+        {
+            try
+            {
+                var body = await ReadJson<List<string>>(req);
+                if (body is null || body.Count == 0) { await Json(res, new { error = "body required: array of tag names" }, 400); return; }
+                await Json(res, await hmiSvc.DeleteTagsAsync(m["device"], m["table"], body));
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── HMI screens — build (create/clear/add items) ──────────────────────
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/hmi/screens/{screen}/build", out m))
+        {
+            try
+            {
+                var body = await ReadJson<HmiScreenBuildRequest>(req);
+                if (body is null) { await Json(res, new { error = "body required: {create, width, height, clear, items:[{type,name,left,top,width,height,text,processValue,ioType,attributes}]}" }, 400); return; }
+                await Json(res, await hmiScreenSvc.BuildScreenAsync(m["device"], m["screen"], body));
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
         // ── HMI screens — update faceplate interface parameters ───────────────
         else if (method == "POST" && TryMatch(path, "/api/devices/{device}/hmi/screens/{screen}/update-faceplate-tags", out m))
         {
@@ -976,6 +998,35 @@ async Task<object?> McpDispatch(JsonElement p)
         case "update_faceplate_tags":
             return await hmiScreenSvc.UpdateFaceplateTagsAsync(
                 A("device"), A("screen"), AList<FaceplateTagUpdate>("updates"));
+        case "describe_object":      return await objSvc.DescribeAsync(A("path"));
+        case "get_object_attributes": return await objSvc.GetAsync(A("path"), AList<string>("names"));
+        case "set_object_attributes":
+            return await objSvc.SetAsync(A("path"), AObj<Dictionary<string, object?>>("attributes") ?? new());
+        case "create_object":        return await objSvc.CreateAsync(A("parentPath"), A("name"));
+        case "delete_object":        return await objSvc.DeleteAsync(A("path"));
+        case "list_hmi_connections": return await hmiScreenSvc.ListConnectionsAsync(A("device"));
+        case "list_hmi_screen_items": return await hmiScreenSvc.ListScreenItemsAsync(A("device"), A("screen"));
+        case "build_hmi_screen":
+            return await hmiScreenSvc.BuildScreenAsync(A("device"), A("screen"), new HmiScreenBuildRequest
+            {
+                Create = AObj<bool?>("create") ?? false,
+                Clear  = AObj<bool?>("clear")  ?? false,
+                Width  = AObj<uint?>("width"),
+                Height = AObj<uint?>("height"),
+                Items  = AList<HmiScreenItemSpec>("items"),
+            });
+        case "probe_hmi_download":   return await hmiScreenSvc.ProbeDownloadAsync(A("device"));
+        case "download_hmi":         return await hmiScreenSvc.DownloadAsync(A("device"), A("pcInterface"), AObj<int?>("pcNumber") ?? 1, A("target"));
+        case "check_hmi_layout":   return await hmiScreenSvc.CheckLayoutAsync(A("device"), A("screen"));
+        case "bind_hmi_tag":         return await hmiScreenSvc.BindTagAsync(A("device"), A("screen"), A("item"), A("property"), A("tag"));
+        case "set_hmi_colour_map":
+            return await hmiScreenSvc.SetColourMapAsync(A("device"), A("screen"), A("item"), A("property"),
+                AList<HmiColourMapEntry>("entries").Select(e => (e.Value, e.To, e.Color, e.Flashing)).ToList());
+        case "set_hmi_screen_script":
+            return await hmiScreenSvc.SetScreenScriptAsync(A("device"), A("screen"), A("event"), A("code"));
+        case "delete_hmi_screen":    return await hmiScreenSvc.DeleteScreenAsync(A("device"), A("screen"));
+        case "delete_hmi_tags":      return await hmiSvc.DeleteTagsAsync(A("device"), A("table"), AList<string>("names"));
+        case "compile_hmi":          return await hmiScreenSvc.CompileHmiAsync(A("device"));
         case "read_hmi_screen":      return await hmiEditSvc.ReadScreenAsync(A("device"), A("screen"));
         case "set_hmi_screen_item":
         {
@@ -1109,7 +1160,7 @@ string McpToolName(object def) =>
 
 List<object> McpToolDefs() => new()
 {
-    McpT("connect_to_tia_portal", "Attaches to a running TIA Portal V20 process with an open project.",
+    McpT("connect_to_tia_portal", "Attaches to a running TIA Portal process (the version this server was built for) with an open project.",
         McpP("projectPath", "string", false, "Optional project path to prefer a specific instance")),
     McpT("get_status",   "Returns connection state and details about the currently open TIA Portal project."),
     McpT("save_project", "Saves the currently open TIA Portal project."),
@@ -1270,6 +1321,98 @@ List<object> McpToolDefs() => new()
             McpP("parameterName", "string", true, "Interface parameter to set"),
             McpP("newValue",      "string", true, "New value, usually a tag name"))),
 
+    McpT("describe_object",
+        "Generic Openness browser. Lists the properties (with values and writable flag), compositions (with item names) and child objects at a path. "
+      + "Path = '/'-separated property and item names from the project root, e.g. 'Devices/HMI_1/DeviceItems/[0]', "
+      + "'hmi:HMI_1/Screens/Beacon_Control/ScreenItems/IO_Run' (hmi:<device> = that device's HMI software), "
+      + "'plc:PLC_1/BlockGroup/Blocks/Main', or '.../@Software' on a device item. [n] indexes a composition. Empty path = the project. "
+      + "Uses reflection, not GetAttributeInfos (which crashed TIA).",
+        McpP("path", "string", false, "Object path; empty for the project")),
+    McpT("get_object_attributes", "Reads named properties/attributes of the object at a path (see describe_object).",
+        McpP("path", "string", true, "Object path"),
+        McpPArrOf("names", "string", true, "Property names to read")),
+    McpT("set_object_attributes",
+        "Sets properties on the object at a path, e.g. BackColor '#0B2A4A', Left, Width, Font size via the Font child path, Enabled, Visible. "
+      + "Enums by name, colours as '#RRGGBB'. Reports per-attribute success or error with the value read back. "
+      + "Writes change the project in memory; call save_project to keep them. SetAttribute on Unified objects is a crash risk: set a few at a time.",
+        McpP("path", "string", true, "Object path"),
+        McpP("attributes", "object", true, "Map of property name to value")),
+    McpT("create_object", "Creates a named child in a composition that has Create(string), e.g. a screen under Screens or a tag table. Use dedicated tools for screen items and tags.",
+        McpP("parentPath", "string", true, "Path of the composition"),
+        McpP("name", "string", true, "Name of the new object")),
+    McpT("delete_object", "Deletes the object at a path (needs a Delete method). Destructive. Compositions cannot be deleted.",
+        McpP("path", "string", true, "Object path")),
+    McpT("list_hmi_connections", "Lists the HMI connections on a WinCC Unified HMI device (driver, station, partner, node). Read-only. Connections must be created in the TIA Network view: creating one through Openness crashed TIA V19.",
+        McpP("device", "string", true, "HMI device name")),
+    McpT("list_hmi_screen_items", "Lists the items on one HMI screen with type, position, size and ProcessValue (the bound HMI tag of an IO field). Read-only.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen name")),
+    McpT("probe_hmi_download", "Checks whether a device offers a download service and lists its connection modes, PC interfaces and reachable targets. Downloads nothing. Read-only.",
+        McpP("device", "string", true, "HMI device name")),
+    McpT("download_hmi", "Downloads the HMI software to a target over one PC interface. OVERWRITES the runtime on the target; unverified on V19. Use names from probe_hmi_download.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("pcInterface", "string", true, "PC interface name"),
+        McpP("pcNumber", "integer", false, "PC interface number (default 1)"),
+        McpP("target", "string", true, "Target interface name, e.g. '5 X1'")),
+    McpT("check_hmi_layout","Checks one HMI screen for items outside the screen and items that partially overlap (an item fully inside another, like a button on a card, is fine). Returns verdict pass/warn/fail with errors and warnings. Read-only.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen name")),
+    McpT("bind_hmi_tag", "Binds a screen item property to an HMI tag with a tag dynamization (e.g. BackColor, Text, Visible). Unverified on V19: run on a scratch item first and save the project beforehand.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen name"),
+        McpP("item", "string", true, "Item name"),
+        McpP("property", "string", true, "Property to dynamize, e.g. BackColor"),
+        McpP("tag", "string", true, "HMI tag name")),
+    McpT("set_hmi_colour_map", "Fills the value-to-colour table of a tag dynamization made by bind_hmi_tag, so an item property (e.g. BackColor) follows the tag value: one Range entry per value (From=To). Replaces existing entries. Unverified on V19: save the project first.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen name"),
+        McpP("item", "string", true, "Item name"),
+        McpP("property", "string", true, "Dynamized property, e.g. BackColor"),
+        McpPArr("entries", true, "Value to colour entries",
+            McpP("value", "string", true, "Tag value (start of range), e.g. \"1\""),
+            McpP("to", "string", false, "End of range; omit for the single value"),
+            McpP("color", "string", true, "Property value: colour #RRGGBB, true/false (Visible) or a number"),
+            McpP("flashing", "string", false, "slow | medium | fast: flash while this entry is active"))),
+    McpT("set_hmi_screen_script", "Sets the JavaScript of a screen event (Loaded or Unloaded), e.g. to start a timer that animates items. Runs the TIA syntax check. Unverified on V19: save the project first.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen name"),
+        McpP("event", "string", true, "Loaded or Unloaded"),
+        McpP("code", "string", true, "Unified JavaScript")),
+    McpT("build_hmi_screen",
+        "Creates (create:true) or fills a WinCC Unified HMI screen. clear:true deletes the screen's existing items first. "
+      + "Item types: iofield, textbox, button, rectangle, circle, toggleswitch, or any widget class name (e.g. Slider). "
+      + "'text' and 'label' are NOT supported on MTP700 Unified Comfort; use textbox with Enabled=false and BorderWidth=0 for a label. "
+      + "Text (text, or attributes.Text) must be wrapped as <body><p>…</p></body>; plain text is rejected. "
+      + "iofield: ioType Input|Output|InputOutput, processValue = HMI tag name. attributes: FontSize, colours as '#RRGGBB', BorderWidth, Enabled, etc. "
+      + "Errors are reported per item and per attribute and do not stop the build. Check the screen size against the panel (MTP700 = 800x480).",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen name"),
+        McpP("create", "boolean", false, "Create the screen if it does not exist"),
+        McpP("clear",  "boolean", false, "Delete every existing item first"),
+        McpP("width",  "integer", false, "Screen width in pixels"),
+        McpP("height", "integer", false, "Screen height in pixels"),
+        McpPArr("items", true, "Items to create",
+            McpP("type",         "string",  true,  "iofield | textbox | button | rectangle | circle | toggleswitch | widget class name"),
+            McpP("name",         "string",  true,  "Item name, unique on the screen"),
+            McpP("left",         "integer", false, "X position"),
+            McpP("top",          "integer", false, "Y position"),
+            McpP("width",        "integer", false, "Width (default 100)"),
+            McpP("height",       "integer", false, "Height (default 30)"),
+            McpP("text",         "string",  false, "Caption, wrapped as <body><p>…</p></body>"),
+            McpP("processValue", "string",  false, "HMI tag shown or edited by an iofield"),
+            McpP("ioType",       "string",  false, "Input | Output | InputOutput. Output = read-only display, no keyboard"),
+            McpPArrOf("points",  "integer", false, "polygon/polyline only (type \"Polygon\" or \"Polyline\"): flat list x1,y1,x2,y2,... in screen pixels. Set BackColor, BorderColor, BorderWidth in attributes"),
+            McpP("onTap",        "string",  false,"Button only: Unified JavaScript run on tap, e.g. Tags(\"BC_Pattern\").Write(3); A syntax check is run and reported"),
+            McpP("attributes",   "object",  false, "Extra attributes, e.g. {\"FontSize\":18,\"BackColor\":\"#003366\",\"Enabled\":false}"))),
+    McpT("delete_hmi_screen", "Deletes an HMI screen. Destructive.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen name")),
+    McpT("delete_hmi_tags", "Deletes HMI tags by name from a tag table. Destructive; screen items bound to them will break.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("table",  "string", true, "HMI tag table name"),
+        McpPArrOf("names", "string", true, "Tag names to delete")),
+    McpT("compile_hmi", "Compiles the WinCC Unified HMI software and returns state, error and warning counts and the compiler messages.",
+        McpP("device", "string", true, "HMI device name")),
     McpT("read_hmi_screen",
         "Reads every item on a WinCC Unified screen or popup (nested groups included): name, type, text, position, size, "
       + "visible/enabled, I/O field ProcessValue/OutputFormat, the bound tag, all dynamizations (tag, script, expression) and "

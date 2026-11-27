@@ -107,9 +107,11 @@ public sealed class HmiScreenEditService
                 d["triggerType"] = Safe(() => s.Trigger?.Type.ToString());
                 d["triggerTags"] = Safe(() => s.Trigger?.Tags is null ? null : s.Trigger.Tags.ToString());
                 break;
+#if !TIA_V19 // ExpressionDynamization does not exist in the V19 API
             case ExpressionDynamization e:
                 d["expression"] = Safe(() => e.GetAttribute("Expression")?.ToString());
                 break;
+#endif
             case ResourceListDynamization r:
                 d["resourceList"] = Safe(() => r.ResourceList?.ToString()); d["tag"] = Safe(() => r.Tag);
                 break;
@@ -192,9 +194,13 @@ public sealed class HmiScreenEditService
 
     private static void SetExpression(HmiScreenItemBase item, string property, string expression)
     {
+#if TIA_V19
+        throw new NotSupportedException("Expression dynamizations are not available in the TIA V19 API.");
+#else
         var ex = item.Dynamizations.Find(property) as ExpressionDynamization
                  ?? item.Dynamizations.Create<ExpressionDynamization>(property);
         ex.SetAttribute("Expression", expression);
+#endif
     }
 
     // ── dynamize_hmi_screen_item (script dynamization, e.g. text from a tag) ──
@@ -348,12 +354,14 @@ public sealed class HmiScreenEditService
                         if (s.Trigger.Tags != null) n.Trigger.Tags = s.Trigger.Tags;
                         break;
                     }
+#if !TIA_V19
                     case ExpressionDynamization e:
                     {
                         var n = dst.Dynamizations.Create<ExpressionDynamization>(e.PropertyName);
                         n.SetAttribute("Expression", e.GetAttribute("Expression"));
                         break;
                     }
+#endif
                     default:
                         notCopied.Add($"dynamization {x.PropertyName} ({x.DynamizationType})");
                         break;

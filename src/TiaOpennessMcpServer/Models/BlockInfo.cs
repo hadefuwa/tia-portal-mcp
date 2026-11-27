@@ -47,6 +47,51 @@ public sealed record HmiTagCreateRequest
     public          bool   BindPlc  { get; init; }
 }
 
+public sealed record HmiScreenItemSpec
+{
+    /// <summary>text | iofield | button | rectangle | circle | toggleswitch</summary>
+    public required string Type { get; init; }
+    public required string Name { get; init; }
+    public int Left { get; init; }
+    public int Top { get; init; }
+    public uint Width { get; init; } = 100;
+    public uint Height { get; init; } = 30;
+    /// <summary>Caption for text / button / toggleswitch.</summary>
+    public string? Text { get; init; }
+    /// <summary>HMI tag shown/edited by an iofield.</summary>
+    public string? ProcessValue { get; init; }
+    /// <summary>JavaScript run when a button is tapped, e.g. Tags("BC_Pattern").Write(3);</summary>
+    public string? OnTap { get; init; }
+    /// <summary>"Input", "Output" or "InputOutput" for an iofield.</summary>
+    public string? IoType { get; init; }
+    /// <summary>Extra attributes applied with SetAttribute (string, number, bool). Errors are reported, not fatal.</summary>
+    public Dictionary<string, object?>? Attributes { get; init; }
+    /// <summary>polygon / polyline only: flat list x1,y1,x2,y2,... in screen pixels.</summary>
+    public List<int>? Points { get; init; }
+}
+
+public sealed record HmiScreenBuildRequest
+{
+    public bool Create { get; init; }
+    public uint? Width { get; init; }
+    public uint? Height { get; init; }
+    /// <summary>Delete every existing item on the screen first.</summary>
+    public bool Clear { get; init; }
+    public List<HmiScreenItemSpec> Items { get; init; } = new();
+}
+
+public sealed record HmiColourMapEntry
+{
+    /// <summary>Tag value that selects this entry, e.g. "1".</summary>
+    public required string Value { get; init; }
+    /// <summary>Optional end of the range; omitted = the single value above.</summary>
+    public string? To { get; init; }
+    /// <summary>Property value for that tag value: a colour "#FF0000", "true"/"false" (e.g. Visible) or a number.</summary>
+    public required string Color { get; init; }
+    /// <summary>Optional: slow | medium | fast makes the property flash while this entry is active.</summary>
+    public string? Flashing { get; init; }
+}
+
 /// <summary>Re-point an EXISTING HMI tag at a different PLC tag (see HmiTagService.RelinkTagsAsync).</summary>
 public sealed record HmiTagRelinkRequest
 {

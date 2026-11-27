@@ -61,18 +61,17 @@ public sealed class TiaPortalService : IDisposable
 
             _log.LogInformation("{Count} TIA Portal process(es) found — attaching…", processes.Count);
 
-            // Default to the first process that actually has a project open. TIA spawns
-            // project-less helper instances, and attaching to one of those yields a null
-            // Project and a confusing "no project is open" error.
-            TiaPortalProcess targetProcess = processes[0];
+            // TIA can leave project-less helper instances (and stale ones after a crash). Prefer a
+            // process that has a project open, then one with a user interface, then the newest
+            // (highest Id), instead of the first listed.
+            TiaPortalProcess targetProcess = processes
+                .Cast<TiaPortalProcess>()
+                .OrderByDescending(p => p.ProjectPath is not null)
+                .ThenByDescending(p => p.Mode == TiaPortalMode.WithUserInterface)
+                .ThenByDescending(p => p.Id)
+                .First();
             foreach (TiaPortalProcess p in processes)
-            {
-                if (p.ProjectPath is not null)
-                {
-                    targetProcess = p;
-                    break;
-                }
-            }
+                _log.LogInformation("TIA process {Id} mode={Mode} project={Path}", p.Id, p.Mode, p.ProjectPath?.FullName);
 
             // An explicit path always wins.
             if (!string.IsNullOrWhiteSpace(projectPath))

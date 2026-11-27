@@ -12,14 +12,14 @@
     <PlatformTarget>x64</PlatformTarget>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <UseWindowsForms>true</UseWindowsForms>
-    <!--
-      When TiaVersion builds override BaseIntermediateOutputPath (obj\V20\,
-      obj\V21\, …) the SDK's default source-glob exclude only covers the
-      CURRENT run's obj dir, not sibling version dirs left over from other
-      builds. Without this, e.g. a V21 build picks up obj\V20\...\*.cs as
-      stray source and fails with "duplicate assembly attribute".
-    -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;obj/**</DefaultItemExcludes>
+    <!-- Pass -p:TiaVersion=19, 20 or 21 (required, no default) -->
+    <DefineConstants>$(DefineConstants);TIA_V$(TiaVersion)</DefineConstants>
+    <TiaApiDir>$(PROGRAMFILES)\Siemens\Automation\Portal V$(TiaVersion)\PublicAPI\V$(TiaVersion)</TiaApiDir>
+    <!-- Separate output and intermediate folders per version, so switching never needs a clean -->
+    <OutputPath>bin\V$(TiaVersion)\$(Configuration)\</OutputPath>
+    <IntermediateOutputPath>obj\V$(TiaVersion)\$(Configuration)\</IntermediateOutputPath>
+    <!-- Keep every obj\V* folder out of the source glob, so a build never picks up another version's generated .cs files -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;obj/**;bin\**;bin/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -32,50 +32,43 @@
   <!--
     TIA Portal's Openness API is version-specific and NOT drop-in compatible
     across major versions:
-      - V20 and earlier ship one monolithic Siemens.Engineering.dll (+ an
-        unused classic-HMI Siemens.Engineering.Hmi.dll) directly under
-        PublicAPI\{v}.
+      - V19 and V20 ship one monolithic Siemens.Engineering.dll (+ an unused
+        classic-HMI Siemens.Engineering.Hmi.dll) directly under PublicAPI\{v}.
       - V21 split it into several assemblies under PublicAPI\{v}\net48\,
         renaming the core one to Siemens.Engineering.Base.dll and moving the
         HmiUnified (WinCC Unified) types this project uses into
         Siemens.Engineering.WinCCUnified.dll.
-    Both DLL sets are strongly named with version-specific identities, so a
-    single compiled binary can't satisfy both at runtime — pick which one to
-    build against with -p:TiaVersion=V20 (default) or -p:TiaVersion=V21.
-    See Program.cs's assembly-path detection for the runtime side (it finds
-    whichever TIA Portal version is actually installed/running).
+    The DLLs are strongly named with version-specific identities, so one
+    compiled binary can't satisfy several versions: pick one with
+    -p:TiaVersion=19, 20 or 21. Program.cs / TiaVersion.cs find the matching
+    installation at run time.
   -->
-  <PropertyGroup>
-    <TiaVersion Condition="'$(TiaVersion)' == ''">V20</TiaVersion>
-    <DefineConstants>$(DefineConstants);TIA_$(TiaVersion)</DefineConstants>
-  </PropertyGroup>
-
-  <ItemGroup Condition="'$(TiaVersion)' == 'V20'">
+  <ItemGroup Condition="'$(TiaVersion)' == '19' Or '$(TiaVersion)' == '20'">
     <Reference Include="Siemens.Engineering">
-      <HintPath>$(PROGRAMFILES)\Siemens\Automation\Portal V20\PublicAPI\V20\Siemens.Engineering.dll</HintPath>
+      <HintPath>$(TiaApiDir)\Siemens.Engineering.dll</HintPath>
       <Private>False</Private>
       <SpecificVersion>False</SpecificVersion>
     </Reference>
     <Reference Include="Siemens.Engineering.Hmi">
-      <HintPath>$(PROGRAMFILES)\Siemens\Automation\Portal V20\PublicAPI\V20\Siemens.Engineering.Hmi.dll</HintPath>
+      <HintPath>$(TiaApiDir)\Siemens.Engineering.Hmi.dll</HintPath>
       <Private>False</Private>
       <SpecificVersion>False</SpecificVersion>
     </Reference>
   </ItemGroup>
 
-  <ItemGroup Condition="'$(TiaVersion)' == 'V21'">
+  <ItemGroup Condition="'$(TiaVersion)' == '21'">
     <Reference Include="Siemens.Engineering.Base">
-      <HintPath>$(PROGRAMFILES)\Siemens\Automation\Portal V21\PublicAPI\V21\net48\Siemens.Engineering.Base.dll</HintPath>
+      <HintPath>$(TiaApiDir)\net48\Siemens.Engineering.Base.dll</HintPath>
       <Private>False</Private>
       <SpecificVersion>False</SpecificVersion>
     </Reference>
     <Reference Include="Siemens.Engineering.WinCCUnified">
-      <HintPath>$(PROGRAMFILES)\Siemens\Automation\Portal V21\PublicAPI\V21\net48\Siemens.Engineering.WinCCUnified.dll</HintPath>
+      <HintPath>$(TiaApiDir)\net48\Siemens.Engineering.WinCCUnified.dll</HintPath>
       <Private>False</Private>
       <SpecificVersion>False</SpecificVersion>
     </Reference>
     <Reference Include="Siemens.Engineering.Step7">
-      <HintPath>$(PROGRAMFILES)\Siemens\Automation\Portal V21\PublicAPI\V21\net48\Siemens.Engineering.Step7.dll</HintPath>
+      <HintPath>$(TiaApiDir)\net48\Siemens.Engineering.Step7.dll</HintPath>
       <Private>False</Private>
       <SpecificVersion>False</SpecificVersion>
     </Reference>
@@ -87,4 +80,9 @@
     </None>
   </ItemGroup>
 
+  <!-- No default on purpose: the TIA version must be chosen explicitly. -->
+  <Target Name="RequireTiaVersion" BeforeTargets="ResolveAssemblyReferences;CoreCompile">
+    <Error Condition="'$(TiaVersion)' != '19' And '$(TiaVersion)' != '20' And '$(TiaVersion)' != '21'"
+           Text="Set the TIA Portal version: dotnet build -p:TiaVersion=19 (or 20 or 21). Got '$(TiaVersion)'." />
+  </Target>
 </Project>

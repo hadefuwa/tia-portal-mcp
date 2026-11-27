@@ -6,10 +6,10 @@ Project-level guidance for Claude Code working in this repo.
 
 ## What this project is
 
-A .NET Framework 4.8 app that exposes TIA Portal V20 as an MCP server. Two transports:
+A .NET Framework 4.8 app that exposes TIA Portal (V19, V20 or V21, chosen at build time) as an MCP server. Two transports:
 
 - **HTTP** — dashboard window running at `http://localhost:5000`. Used by Claude Desktop (via Custom Connectors UI) and direct REST calls.
-- **stdio** — headless mode (`--mcp-stdio` flag). Used by Claude Code, Cursor, VS Code Copilot. The `.mcp.json` at `~/.claude/.mcp.json` points to the exe with this flag.
+- **stdio** — headless mode (`--mcp-stdio` flag). Used by Claude Code, Cursor, VS Code Copilot. The repo-root `.mcp.json` points to the exe with this flag.
 
 Both transports share the same `HandleMcpRequest` method in `Program.cs`.
 
@@ -17,15 +17,21 @@ Both transports share the same `HandleMcpRequest` method in `Program.cs`.
 
 ## Build and run
 
+**TIA version switch.** One shared source tree targets both versions. `-p:TiaVersion=19`, `20` or `21` (required, no default; the build fails without it) selects the Siemens DLL folder, the `TIA_V19`/`TIA_V20` constant, `TiaVersion.Name` (written into generated XML as `<Engineering version>`) and the runtime assembly search paths. Each version builds into its own folders (`bin\V19\Release\net48`, `bin\V20\Release\net48`, and matching `obj\V19`/`obj\V20`), so switching version never needs a clean and both builds can sit side by side. Point `.mcp.json` and your shortcut at the version you use. Findings below marked V19/V20 were only tested on that version; V20 was last built before the V19 port, so re-check it on a V20 machine.
+
+```powershell
+dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:TiaVersion=20
+```
+
 ```powershell
 # Build
-dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release
+dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:TiaVersion=19
 
 # Run dashboard (HTTP + WinForms window)
-.\src\TiaOpennessMcpServer\bin\Release\net48\TiaPortalDashboard.exe
+.\src\TiaOpennessMcpServer\bin\V19\Release\net48\TiaPortalDashboard.exe
 
 # Run headless stdio MCP (for Claude Code)
-.\src\TiaOpennessMcpServer\bin\Release\net48\TiaPortalDashboard.exe --mcp-stdio
+.\src\TiaOpennessMcpServer\bin\V19\Release\net48\TiaPortalDashboard.exe --mcp-stdio
 ```
 
 The `.bat` shortcut on the desktop auto-detects source changes and rebuilds before launching.
@@ -34,7 +40,7 @@ The `.bat` shortcut on the desktop auto-detects source changes and rebuilds befo
 
 ```powershell
 taskkill /F /IM TiaPortalDashboard.exe
-dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release
+dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:TiaVersion=19
 ```
 
 ---
@@ -141,7 +147,7 @@ GlobalDB member declarations live in `<AttributeList> > <Interface> > <Sections>
 
 ## Claude Code `.mcp.json`
 
-MCP server config for Claude Code lives at `~/.claude/.mcp.json` (not `settings.json`, which has no `mcpServers` field):
+Claude Code reads MCP servers only at session start, from a project `.mcp.json`, `~/.claude.json` or `claude mcp add`. It does NOT read `~/.claude/.mcp.json` (an earlier version of this file said it did, which is why the tools never loaded). This repo ships a root `.mcp.json` using stdio with a relative exe path, so opening Claude Code in the repo is enough; approve the project server on first use and rebuild first so the exe exists. For the running dashboard instead: `claude mcp add --transport http tia-portal --scope user http://localhost:5000/mcp`. Do not enable both (duplicate tools).
 
 ```json
 {
@@ -268,6 +274,10 @@ Other findings:
 - `Address` exists but cannot be written: on an Internal tag `Set is not allowed for disabled fields`; on a connected tag without a PLC tag `Controller tag is not defined in tag X`. The absolute-address route (`%M0.0`) does not work. `LogicalAddress` and `AddressAccessMode` do not exist on `HmiTag`.
 - Other readable attributes: `AcquisitionMode` (`CyclicOnUse`), `AcquisitionCycle` (`T1s`; `T100ms` on an existing tag), `LinearScaling`, `Address`. `Comment`, `Persistency`, `Quality`, `ArrayElements` are not supported on `HmiTag`.
 - `Tags` (`HmiTagComposition`) has `Export(DirectoryInfo[, name])` and `Import(DirectoryInfo[, name])`; `HmiTagTable` itself has no export/import. The import route was not needed once the link worked, so it was not tried.
+- **DANGER: creating an HMI connection from Openness (`hmi.Connections.Create`, endpoint since removed) crashed TIA Portal V19** when creating a connection with `CommunicationDriver="SIMATIC S7 1200/1500"`, `Station`/`Partner="PLC_1"`, `Node="PLC_1.PROFINET interface_1"`. Unsaved project changes were lost. Create HMI connections in the TIA Network view instead.
+- Screens (`POST /hmi/screens/{screen}/build`, live-tested V19, TP1200 Comfort Unified): `HmiIOField`, `HmiTextBox`, `HmiButton`, `HmiRectangle` create fine. `HmiText` and `HmiLabel` are "not supported" on this panel (use a disabled `TextBox`). Text must be wrapped as `<body><p>…</p></body>`, plain text is "invalid format".
+- MCP tools added for HMI (V19, live-tested over `/mcp`): `list_hmi_connections`, `list_hmi_screen_items` (also shows each IO field's bound tag), `build_hmi_screen`, `delete_hmi_screen`, `delete_hmi_tags`. `compile_hmi` is registered but **fails on V19** (`Error when calling method 'Compile' of type CompileProvider`, no detail): compile the HMI from the TIA UI. `HmiSoftware` has no `GetService`; the compile service is looked up on the hosting `DeviceItem`.
+- `check_hmi_layout` (off-screen and partial-overlap check) and `bind_hmi_tag` (TagDynamization via reflection, **not yet live-tested**; use a concrete type only, an abstract dynamization type reportedly crashes TIA). `set_object_attributes` only falls back to `SetAttribute` on `HmiTag`: on other Unified objects `SetAttribute` can throw `NonRecoverableException` and crash TIA.
 - **DANGER: do not call `GetAttributeInfos()` on an `HmiTag`.** It threw `Property : ConfirmationType not found` and TIA Portal then crashed. Read named attributes one at a time instead.
 
 ### WinCC Unified forcing faceplate — struct tag requirement
@@ -303,3 +313,13 @@ try {
 `--profile lite|standard|full|readonly` (or `TIA_MCP_PROFILE`) trims the advertised tools; `--annotations` (or `TIA_MCP_ANNOTATIONS=1`) adds `readOnlyHint`/`destructiveHint` to `tools/list`. Both are opt-in; the default is `full`, no annotations.
 
 Verified over stdio: default 39 tools with no `annotations` field; `readonly` exposes 20 look-only tools; `--annotations` marks 20 read-only and 7 destructive; a `tools/call` for a tool outside the profile (e.g. `write_block_scl` under `readonly`) is rejected. `import_tag_table` uses `ImportOptions.Override` (replaces an existing table), so it stays in the destructive set. `create_lad_block` only replaces a block with `overwrite:true`, so it is not marked destructive.
+
+---
+
+## V21 and the merged V21 repo
+
+The former `tia-portal-mcp-v21` repo is merged in, so `-p:TiaVersion=21` builds from this tree. V21 splits the Openness DLLs (`Siemens.Engineering.Base`, `.WinCCUnified`, `.Step7` under `PublicAPI\V21\net48`); the csproj picks the right set. **The V21 build has not been compiled or run from this merge** (no V21 install on the dev machine): build it on a V21 machine first.
+
+Tools that came with it (the V21 repo marked them untested against TIA): `read_hmi_screen`, `set_hmi_screen_item`, `copy_hmi_screen_item`, `dynamize_hmi_screen_item`, `set_hmi_item_event_script`, `relink_hmi_tags`, `save_project_as`, plus PLC data type tools and `COMMENTING_PROMPT.md`. The write tools take `dryRun` and need `confirm:true` for a real run; use `save_project_as` for a scratch copy first.
+
+`ExpressionDynamization` is not in the V19 API: on a V19 build the `visibilityExpression` edit reports "not available" and expression dynamizations are skipped by read/copy (`#if TIA_V19` in `HmiScreenEditService.cs`). `connect` now prefers a TIA process that has a project open, then one with a UI, then the newest.

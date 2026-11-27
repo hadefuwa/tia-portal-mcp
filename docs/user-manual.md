@@ -15,7 +15,7 @@ Both tabs talk to the same REST server running inside the app (port 5000) and th
 
 ## Getting started
 
-1. Open your project in **TIA Portal V20**.
+1. Open your project in **TIA Portal (V19, V20 or V21)**.
 2. Launch the app from your desktop shortcut (`Start TIA Dashboard.bat`).
 3. The dashboard opens in a native Windows window.
 4. Click **Connect to TIA Portal** (top of the left sidebar) — the status bar turns green and shows your project name.
@@ -119,7 +119,7 @@ Claude will call the tools automatically, show you what it's doing, and ask for 
 ### Connection tools
 
 **connect_to_tia_portal**
-Attaches to the running TIA Portal V20 process. TIA Portal must be open with a project loaded. Returns the project name and path on success.
+Attaches to the running TIA Portal process. TIA Portal must be open with a project loaded. Returns the project name and path on success.
 
 **get_status**
 Returns the current connection state and, if connected, the project name and path. Use this to confirm the server is alive and connected.
@@ -221,6 +221,6 @@ Returns a complete index of the entire project: every device, every block (name,
 | "No running TIA Portal process found" | TIA Portal must be open with a project loaded before clicking Connect |
 | "This function is not supported in online mode" when creating or importing a block | The PLC is online. Go offline in TIA Portal (Online → Go offline) and retry |
 | "Inconsistent blocks cannot be exported" | Press Ctrl+B in TIA Portal to compile everything, then retry |
-| My changes don't appear after restarting the app | The app bat file runs `bin\Release\net48\TiaPortalDashboard.exe` — rebuild with `dotnet build -c Release` or the dashboard will run old code |
+| My changes don't appear after restarting the app | The app bat file runs `bin\V19\Release\net48\TiaPortalDashboard.exe` (or `V20`) — rebuild with `dotnet build -c Release -p:TiaVersion=19` (or 20) or the dashboard will run old code |
 | Claude says "Unknown tool" | Restart Claude Desktop after editing the MCP config — it only loads tools at startup |
 | Live call log is empty | The log only fills when Claude calls a tool via MCP (`/mcp` endpoint), not when you use User Control manually |
