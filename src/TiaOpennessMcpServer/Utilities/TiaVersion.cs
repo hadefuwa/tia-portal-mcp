@@ -1,26 +1,31 @@
 namespace TiaOpennessMcpServer.Utilities;
 
 /// <summary>
-/// The TIA Portal version this build targets. Chosen at build time with
-/// <c>-p:TiaVersion=19</c> or <c>-p:TiaVersion=20</c> (see the csproj); there is no default.
+/// The TIA Portal version this build targets. Required at build time:
+/// <c>-p:TiaVersion=19</c>, <c>20</c> or <c>21</c> (see the csproj); there is no default.
 /// </summary>
 public static class TiaVersion
 {
-#if TIA_V20
+#if TIA_V21
+    public const string Name = "V21";
+#elif TIA_V20
     public const string Name = "V20";
 #elif TIA_V19
     public const string Name = "V19";
 #else
-#error Build with -p:TiaVersion=19 or -p:TiaVersion=20
+#error Build with -p:TiaVersion=19, 20 or 21
     public const string Name = "";
 #endif
 
-    /// <summary>Folders searched for Siemens.Engineering*.dll at run time.</summary>
+    private const string Root = @"C:\Program Files\Siemens\Automation";
+
+    /// <summary>Folders searched for Siemens.Engineering*.dll at run time. V21 keeps its DLLs under net48\.</summary>
     public static string[] SearchPaths { get; } = new[]
     {
-        $@"C:\Program Files\Siemens\Automation\Portal {Name}\PublicAPI\{Name}",
-        $@"C:\Program Files\Siemens\Automation\Portal {Name}\Bin\PublicAPI",
-        $@"C:\Program Files\Siemens\Automation\Portal {Name}\Bin\PublicAPI\Client",
-        $@"C:\Program Files\Siemens\Automation\Portal {Name}\Bin",
+        $@"{Root}\Portal {Name}\PublicAPI\{Name}\net48",
+        $@"{Root}\Portal {Name}\PublicAPI\{Name}",
+        $@"{Root}\Portal {Name}\Bin\PublicAPI",
+        $@"{Root}\Portal {Name}\Bin\PublicAPI\Client",
+        $@"{Root}\Portal {Name}\Bin",
     };
 }

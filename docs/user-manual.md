@@ -15,7 +15,7 @@ Both tabs talk to the same REST server running inside the app (port 5000) and th
 
 ## Getting started
 
-1. Open your project in **TIA Portal (V19 or V20)**.
+1. Open your project in **TIA Portal (V19, V20 or V21)**.
 2. Launch the app from your desktop shortcut (`Start TIA Dashboard.bat`).
 3. The dashboard opens in a native Windows window.
 4. Click **Connect to TIA Portal** (top of the left sidebar) — the status bar turns green and shows your project name.

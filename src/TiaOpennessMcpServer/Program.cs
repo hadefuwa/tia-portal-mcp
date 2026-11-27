@@ -27,6 +27,29 @@ AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
     return null;
 };
 
+// Diagnostic only (not used for assembly loading): lets the connect error
+// message tell the user when a *different* TIA Portal version is running
+// than the one this build targets, instead of a bare "not found".
+string[] DetectRunningPortalVersions()
+{
+    try
+    {
+        return Process.GetProcessesByName("Siemens.Automation.Portal")
+            .Select(p => { try { return p.MainModule?.FileName; } catch { return null; } })
+            .Where(path => path is not null)
+            .Select(path =>
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(path!, @"Portal (V\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                return m.Success ? m.Groups[1].Value.ToUpperInvariant() : null;
+            })
+            .Where(v => v is not null)
+            .Select(v => v!)
+            .Distinct()
+            .ToArray();
+    }
+    catch { return Array.Empty<string>(); }
+}
+
 // ── Command line ──────────────────────────────────────────────────────────────
 bool stdioMode = Array.IndexOf(args, "--mcp-stdio") >= 0;
 
@@ -66,12 +89,13 @@ var standardTools = new HashSet<string>(liteTools, StringComparer.OrdinalIgnoreC
     "get_project_signature", "get_block_attributes", "patch_block_texts",
     "create_tag_table", "create_tag", "export_block", "export_tag_table",
     "get_device", "get_io_mapping",
-    "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags", "create_hmi_tags",
+    "list_hmi_tag_tables", "get_hmi_tags", "get_all_hmi_tags", "create_hmi_tags", "relink_hmi_tags",
     "list_hmi_screens", "get_screen_tag_refs", "update_faceplate_tags",
     "list_hmi_connections", "list_hmi_screen_items", "build_hmi_screen",
     "delete_hmi_screen", "delete_hmi_tags", "compile_hmi",
     "check_hmi_layout", "bind_hmi_tag", "set_hmi_colour_map", "set_hmi_screen_script",
     "describe_object", "get_object_attributes",
+    "read_hmi_screen", "set_hmi_screen_item", "copy_hmi_screen_item", "dynamize_hmi_screen_item", "set_hmi_item_event_script", "save_project_as",
 };
 
 // readonly = look, never edit. Opt-in (--profile readonly); the default profile
@@ -87,6 +111,7 @@ var readonlyTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     "list_hmi_screens", "get_screen_tag_refs",
     "list_hmi_connections", "list_hmi_screen_items", "compile_hmi", "check_hmi_layout",
     "describe_object", "get_object_attributes",
+    "list_hmi_screens", "get_screen_tag_refs", "read_hmi_screen",
 };
 
 // Tools that only read the project. Used for the MCP readOnlyHint annotation.
@@ -100,6 +125,8 @@ var destructiveHintTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     "write_block_scl", "import_block_xml", "import_tag_table", "patch_block_texts",
     "batch_rename_tags", "update_faceplate_tags", "close_project",
     "delete_hmi_screen", "delete_hmi_tags", "set_object_attributes", "delete_object",
+    "batch_rename_tags", "update_faceplate_tags", "close_project", "relink_hmi_tags",
+    "set_hmi_screen_item", "copy_hmi_screen_item", "dynamize_hmi_screen_item", "set_hmi_item_event_script",
 };
 
 // --annotations (or TIA_MCP_ANNOTATIONS=1) adds MCP tool annotations to
@@ -127,8 +154,22 @@ services.AddSingleton<TagService>();
 services.AddSingleton<HmiTagService>();
 services.AddSingleton<HmiScreenService>();
 services.AddSingleton<ObjectBrowserService>();
+services.AddSingleton<HmiScreenEditService>();
 
 var sp      = services.BuildServiceProvider();
+
+{
+    var startupLog = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+    var runningVersions = DetectRunningPortalVersions();
+    if (runningVersions.Length > 0 && !runningVersions.Contains(TiaVersion.Name))
+    {
+        startupLog.LogWarning(
+            "This server was built for TIA Portal {Built}, but the running instance is {Running}. " +
+            "Rebuild for {RunningAgain} with -p:TiaVersion=19|20|21 (see TiaOpennessMcpServer.csproj) or open TIA Portal {BuiltAgain} instead.",
+            TiaVersion.Name, string.Join(", ", runningVersions), string.Join(", ", runningVersions), TiaVersion.Name);
+    }
+}
+
 var tia     = sp.GetRequiredService<TiaPortalService>();
 var hw      = sp.GetRequiredService<HardwareService>();
 var sw      = sp.GetRequiredService<SoftwareService>();
@@ -137,6 +178,7 @@ var tagSvc  = sp.GetRequiredService<TagService>();
 var hmiSvc      = sp.GetRequiredService<HmiTagService>();
 var hmiScreenSvc = sp.GetRequiredService<HmiScreenService>();
 var objSvc       = sp.GetRequiredService<ObjectBrowserService>();
+var hmiEditSvc   = sp.GetRequiredService<HmiScreenEditService>();
 
 var mcpLog  = new List<McpLogEntry>();
 var mcpLock = new object();
@@ -253,7 +295,11 @@ async Task HandleAsync(HttpListenerContext ctx)
         // ── Connect ───────────────────────────────────────────────────────────
         else if (method == "POST" && path == "/api/connect")
         {
-            try   { await Json(res, await tia.AttachToRunningAsync()); }
+            try
+            {
+                var body = await ReadJson<ConnectRequest>(req);
+                await Json(res, await tia.AttachToRunningAsync(body?.ProjectPath));
+            }
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
         }
 
@@ -360,6 +406,66 @@ async Task HandleAsync(HttpListenerContext ctx)
                 var body = await ReadJson<BlockTextsRequest>(req);
                 if (body is null) { await Json(res, new { error = "body required" }, 400); return; }
                 await sw.PatchBlockTextsAsync(m["device"], m["block"], body);
+                await Json(res, new { success = true });
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── Project texts / languages ─────────────────────────────────────────
+        else if (method == "GET" && path == "/api/project/languages")
+        {
+            try   { await Json(res, await tia.GetLanguagesAsync()); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        else if (method == "POST" && path == "/api/project/texts/export")
+        {
+            try
+            {
+                var body = await ReadJson<ProjectTextsRequest>(req);
+                await Json(res, await tia.ExportProjectTextsAsync(
+                    body?.Path ?? "", body?.Source ?? "en-US", body?.Target ?? "en-GB"));
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        else if (method == "POST" && path == "/api/project/texts/import")
+        {
+            try
+            {
+                var body = await ReadJson<ProjectTextsRequest>(req);
+                await tia.ImportProjectTextsAsync(body?.Path ?? "", body?.ImportAll ?? true);
+                await Json(res, new { success = true });
+            }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── Software compile (whole PLC) ──────────────────────────────────────
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/compile", out m))
+        {
+            try   { await Json(res, new { result = await sw.CompileSoftwareAsync(m["device"]) }); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        // ── PLC data types (UDTs) ─────────────────────────────────────────────
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/types", out m))
+        {
+            try   { await Json(res, await sw.ListTypesAsync(m["device"])); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        else if (method == "GET" && TryMatch(path, "/api/devices/{device}/types/{type}", out m))
+        {
+            try   { await Json(res, await sw.ReadTypeAsync(m["device"], m["type"])); }
+            catch (Exception ex) { await Json(res, new { error = ex.Message }); }
+        }
+
+        else if (method == "POST" && TryMatch(path, "/api/devices/{device}/types/{type}/xml", out m))
+        {
+            try
+            {
+                var body = await ReadJson<XmlWriteRequest>(req);
+                await sw.WriteTypeXmlAsync(m["device"], m["type"], body?.Content ?? "");
                 await Json(res, new { success = true });
             }
             catch (Exception ex) { await Json(res, new { error = ex.Message }); }
@@ -769,7 +875,7 @@ async Task<object?> McpDispatch(JsonElement p)
 
     switch (name)
     {
-        case "connect_to_tia_portal":  return await tia.AttachToRunningAsync();
+        case "connect_to_tia_portal":  return await tia.AttachToRunningAsync(A("projectPath", null!));
         case "get_status":
             if (!tia.IsConnected) return new { connected = false };
             try   { return new { connected = true, project = await tia.GetProjectInfoAsync() }; }
@@ -809,6 +915,10 @@ async Task<object?> McpDispatch(JsonElement p)
                 Number     = AIN("number"),
                 SourceCode = A("sourceCode")
             });
+        case "compile_software":       return new { result = await sw.CompileSoftwareAsync(A("device")) };
+        case "list_types":             return await sw.ListTypesAsync(A("device"));
+        case "read_type":              return await sw.ReadTypeAsync(A("device"), A("type"));
+        case "import_type_xml":        await sw.WriteTypeXmlAsync(A("device"), A("type"), A("content")); return new { success = true };
         case "list_tag_tables":        return await tagSvc.GetTagTablesAsync(A("device"));
         case "get_tags":               return await tagSvc.GetTagsAsync(A("device"), A("table"));
         case "analyze_scl":            return await scl.AnalyzeAsync(A("source"), A("blockName", "Block"), A("blockType", "FB"));
@@ -838,6 +948,13 @@ async Task<object?> McpDispatch(JsonElement p)
         case "create_hmi_tags":
             return await hmiSvc.CreateTagsAsync(
                 A("device"), A("table"), AList<HmiTagCreateRequest>("tags"));
+        case "relink_hmi_tags":
+        {
+            bool relinkDry = AB("dryRun");
+            if (!relinkDry) RequireConfirm();
+            return await hmiSvc.RelinkTagsAsync(
+                A("device"), A("table"), AList<HmiTagRelinkRequest>("tags"), relinkDry);
+        }
         case "list_hmi_screens":     return await hmiScreenSvc.ListScreensAsync(A("device"));
         case "get_screen_tag_refs":  return await hmiScreenSvc.GetScreenTagRefsAsync(A("device"), A("screen"));
         case "update_faceplate_tags":
@@ -872,6 +989,39 @@ async Task<object?> McpDispatch(JsonElement p)
         case "delete_hmi_screen":    return await hmiScreenSvc.DeleteScreenAsync(A("device"), A("screen"));
         case "delete_hmi_tags":      return await hmiSvc.DeleteTagsAsync(A("device"), A("table"), AList<string>("names"));
         case "compile_hmi":          return await hmiScreenSvc.CompileHmiAsync(A("device"));
+        case "read_hmi_screen":      return await hmiEditSvc.ReadScreenAsync(A("device"), A("screen"));
+        case "set_hmi_screen_item":
+        {
+            bool dry = AB("dryRun");
+            if (!dry) RequireConfirm();
+            return await hmiEditSvc.SetItemAsync(A("device"), A("screen"), A("item"),
+                new HmiScreenEditService.ItemEdit(AN("text"), AN("processTag"), AN("outputFormat"), AN("visibilityExpression")), dry);
+        }
+        case "copy_hmi_screen_item":
+        {
+            bool dry = AB("dryRun");
+            if (!dry) RequireConfirm();
+            return await hmiEditSvc.CopyItemAsync(A("device"), A("screen"), A("source"), A("newName"),
+                new HmiScreenEditService.ItemEdit(AN("text"), AN("processTag"), AN("outputFormat"), AN("visibilityExpression")),
+                AIN("offsetX"), AIN("offsetY"), dry);
+        }
+        case "dynamize_hmi_screen_item":
+        {
+            bool dry = AB("dryRun");
+            if (!dry) RequireConfirm();
+            return await hmiEditSvc.DynamizeItemAsync(A("device"), A("screen"), A("item"), A("property"),
+                A("scriptCode"), AObj<List<string>>("triggerTags"), AN("triggerType"), dry);
+        }
+        case "set_hmi_item_event_script":
+        {
+            bool dry = AB("dryRun");
+            if (!dry) RequireConfirm();
+            return await hmiEditSvc.SetEventScriptAsync(A("device"), A("screen"), A("item"),
+                A("eventType"), A("scriptCode"), dry);
+        }
+        case "save_project_as":
+            RequireConfirm();
+            return await tia.SaveProjectAsAsync(A("path"));
         case "get_block_attributes": return await sw.GetBlockAttributeInfosAsync(A("device"), A("block"));
         case "patch_block_texts":
             await sw.PatchBlockTextsAsync(A("device"), A("block"),
@@ -987,6 +1137,17 @@ List<object> McpToolDefs() => new()
         McpP("type",        "string", true,  "Block type: FB, FC, OB, or GlobalDB"),
         McpP("sourceCode",  "string", true,  "Full SCL source"),
         McpP("number",      "integer", false, "Block number — omit to let TIA Portal assign one")),
+    McpT("compile_software", "Compiles the whole PLC software (Compile > Software in TIA Portal). Compiling individual blocks does NOT make PLC data types consistent, and inconsistent objects export as empty — run this if read_block or read_type returns no XML.",
+        McpP("device", "string", true, "Device name")),
+    McpT("list_types", "Lists all PLC data types (UDTs) on a device, including those inside type folders.",
+        McpP("device", "string", true, "Device name")),
+    McpT("read_type", "Reads a PLC data type (UDT) and returns its SimaticML XML.",
+        McpP("device", "string", true, "Device name"),
+        McpP("type",   "string", true, "PLC data type name")),
+    McpT("import_type_xml", "Imports raw SimaticML XML into a PLC data type (UDT), overwriting it. Use to edit UDT member comments or structure.",
+        McpP("device",  "string", true, "Device name"),
+        McpP("type",    "string", true, "PLC data type name"),
+        McpP("content", "string", true, "Full SimaticML XML document")),
     McpT("create_lad_block",
         "Creates a LAD block from a structured rung description, imports it, and compiles it. You never write "
       + "XML, UIds or wires. Each network is series logic in 'elements' (contact, eq/ne/gt/ge/lt/le, pbox/nbox, ton/tof/tp, branch, call, move) ending in "
@@ -1072,6 +1233,19 @@ List<object> McpToolDefs() => new()
             McpP("plcTag",     "string", false, "PLC tag to link, e.g. \"IO.Motor\". Only applied when bindPlc is true"),
             McpP("connection", "string", false, "HMI connection name (default HMI_Connection_6). Only applied when bindPlc is true"),
             McpP("bindPlc",    "boolean", false, "Opt-in, default false. true = link the new tag to plcTag over connection (sets Connection, then PlcTag; the data type follows the PLC tag). If the link fails the tag is left Internal and reported as created_unlinked"))),
+    McpT("relink_hmi_tags",
+        "Re-points EXISTING HMI tags at different PLC tags. Use it when PLC tags were renamed or replaced and HMI tags show "
+      + "the pink 'tag not found' state (create_hmi_tags skips a tag that already has a PLC link). Sets the Connection first, "
+      + "then PlcTag; if TIA refuses the new link the previous Connection and PlcTag are put back and the tag is reported 'failed'. "
+      + "Run with dryRun:true first to see exactly what would change. A real run needs confirm:true.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("table",  "string", false, "HMI tag table to search; omit to search every table"),
+        McpPArr("tags", true, "Tags to re-point",
+            McpP("name",       "string", true,  "Existing HMI tag name"),
+            McpP("plcTag",     "string", true,  "New PLC tag, e.g. \"Light_Seg1_Color_Byte\" or \"IO.Pallet.Home.X_Position\""),
+            McpP("connection", "string", false, "HMI connection name; omit to keep the tag's current connection")),
+        McpP("dryRun",  "boolean", false, "true = only report what would change, write nothing"),
+        McpP("confirm", "boolean", false, "Must be true for a real run (not for dryRun). Confirm the mapping with the user first.")),
     McpT("list_hmi_screens", "Lists the screens on a WinCC Unified HMI device.",
         McpP("device", "string", true, "HMI device name")),
     McpT("get_screen_tag_refs", "Returns every tag referenced by an HMI screen and the screen item referencing it. Read-only.",
@@ -1177,6 +1351,69 @@ List<object> McpToolDefs() => new()
         McpPArrOf("names", "string", true, "Tag names to delete")),
     McpT("compile_hmi", "Compiles the WinCC Unified HMI software and returns state, error and warning counts and the compiler messages.",
         McpP("device", "string", true, "HMI device name")),
+    McpT("read_hmi_screen",
+        "Reads every item on a WinCC Unified screen or popup (nested groups included): name, type, text, position, size, "
+      + "visible/enabled, I/O field ProcessValue/OutputFormat, the bound tag, all dynamizations (tag, script, expression) and "
+      + "event/property-event scripts. Read-only. Run it before and after an edit to diff the screen.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen or popup name")),
+    McpT("set_hmi_screen_item",
+        "Edits ONE named item on a screen: text (editing-language entry), I/O field process tag (HMI tag name), output format, "
+      + "or a Visible expression. Pass only what should change. Use dryRun:true to preview; a real run needs confirm:true "
+      + "and returns before/after. Work on a copy of the project (save_project_as) first.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen or popup name"),
+        McpP("item",   "string", true, "Item name"),
+        McpP("text", "string", false, "New text for a label/button"),
+        McpP("processTag", "string", false, "HMI tag to bind to the item's ProcessValue"),
+        McpP("outputFormat", "string", false, "Number format, e.g. {0:d} or {0:F2}"),
+        McpP("visibilityExpression", "string", false, "Expression for the Visible property"),
+        McpP("dryRun", "boolean", false, "true = report only, write nothing"),
+        McpP("confirm", "boolean", false, "Must be true for a real run")),
+    McpT("copy_hmi_screen_item",
+        "Duplicates an item on the same screen under a new name (properties and dynamizations are copied; event scripts are "
+      + "not and are reported), optionally with new text, tag, format and offset. If the copy fails part-way the new item is removed. "
+      + "dryRun previews; a real run needs confirm:true.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen or popup name"),
+        McpP("source", "string", true, "Existing item to copy"),
+        McpP("newName", "string", true, "Name of the new item (must not exist)"),
+        McpP("text", "string", false, "Text for the copy"),
+        McpP("processTag", "string", false, "HMI tag for the copy's ProcessValue"),
+        McpP("outputFormat", "string", false, "Number format for the copy"),
+        McpP("visibilityExpression", "string", false, "Visible expression for the copy"),
+        McpP("offsetX", "integer", false, "Move the copy by this many pixels horizontally"),
+        McpP("offsetY", "integer", false, "Move the copy by this many pixels vertically"),
+        McpP("dryRun", "boolean", false, "true = report only"),
+        McpP("confirm", "boolean", false, "Must be true for a real run")),
+    McpT("dynamize_hmi_screen_item",
+        "Attaches a Unified JavaScript script dynamization to one property of one item, e.g. Text driven by a tag. "
+      + "scriptCode is the function body (use 'return ...;'). Re-running updates an existing script dynamization; it refuses to "
+      + "replace a Tag/Expression dynamization. dryRun previews; a real run needs confirm:true.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen or popup name"),
+        McpP("item",   "string", true, "Item name"),
+        McpP("property", "string", true, "Property to dynamize, e.g. Text"),
+        McpP("scriptCode", "string", true, "Script body"),
+        McpPArrOf("triggerTags", "string", false, "HMI tags that re-run the script when they change"),
+        McpP("triggerType", "string", false, "Used when no triggerTags: T1s, T100ms, ..."),
+        McpP("dryRun", "boolean", false, "true = report only"),
+        McpP("confirm", "boolean", false, "Must be true for a real run")),
+    McpT("set_hmi_item_event_script",
+        "Sets the Unified JavaScript for an event on one item (e.g. Tapped, Activated, ValueChanged), creating the handler if needed. "
+      + "dryRun previews; a real run needs confirm:true.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen or popup name"),
+        McpP("item",   "string", true, "Item name"),
+        McpP("eventType", "string", true, "Event name as shown by read_hmi_screen"),
+        McpP("scriptCode", "string", true, "Script body"),
+        McpP("dryRun", "boolean", false, "true = report only"),
+        McpP("confirm", "boolean", false, "Must be true for a real run")),
+    McpT("save_project_as",
+        "Saves the open project to a NEW folder; TIA then keeps that copy open (the original .ap21 is left as last saved). "
+      + "Use it to get a safe working copy before editing screens. Needs confirm:true. Save the original in TIA first.",
+        McpP("path", "string", true, "Empty destination folder, e.g. C:\\Temp\\SF2_scratch"),
+        McpP("confirm", "boolean", false, "Must be true")),
 
     // ── Block inspection ──────────────────────────────────────────────────────
     McpT("get_block_attributes", "Lists every readable and writable attribute and composition on a block. Use to discover what set_* operations are possible.",
@@ -1466,6 +1703,11 @@ class SclAnalyzeRequest { public string Source    { get; set; } = "";
                           public string BlockType { get; set; } = "FB"; }
 class XmlWriteRequest   { public string Content   { get; set; } = ""; }
 class CloneRequest      { public string Name      { get; set; } = ""; public string Path { get; set; } = ""; }
+class ConnectRequest    { public string? ProjectPath { get; set; } }
+class ProjectTextsRequest { public string Path   { get; set; } = "";
+                            public string Source { get; set; } = "en-US";
+                            public string Target { get; set; } = "en-GB";
+                            public bool   ImportAll { get; set; } = true; }
 
 class TagImportRequest        { public string Content      { get; set; } = ""; }
 class TagBatchRenameRequest   { public List<TagRenameItem> Renames { get; set; } = new(); }

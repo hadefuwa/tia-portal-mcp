@@ -46,7 +46,8 @@ public sealed class TiaPortalService : IDisposable
     // ── Connection ────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Attaches to a TIA Portal V20 process that is already running on this machine.
+    /// Attaches to a TIA Portal process that is already running on this machine
+    /// (any installed version — see the Program.cs assembly resolver).
     /// Prefers the process that has the target project open (if projectPath is supplied).
     /// </summary>
     public async Task<ProjectInfo> AttachToRunningAsync(string? projectPath = null)
@@ -56,20 +57,23 @@ public sealed class TiaPortalService : IDisposable
             var processes = TiaPortal.GetProcesses();
             if (processes.Count == 0)
                 throw new InvalidOperationException(
-                    "No running TIA Portal process found. Please open TIA Portal V20 first.");
+                    "No running TIA Portal process found. Please open TIA Portal first.");
 
             _log.LogInformation("{Count} TIA Portal process(es) found — attaching…", processes.Count);
 
-            // Prefer the process whose project path matches, otherwise take the first one.
-            // Several processes can exist (e.g. a stale one after a crash). Prefer one with a
-            // user interface, then the newest (highest Id), instead of the first listed.
+            // TIA can leave project-less helper instances (and stale ones after a crash). Prefer a
+            // process that has a project open, then one with a user interface, then the newest
+            // (highest Id), instead of the first listed.
             TiaPortalProcess targetProcess = processes
                 .Cast<TiaPortalProcess>()
-                .OrderByDescending(p => p.Mode == TiaPortalMode.WithUserInterface)
+                .OrderByDescending(p => p.ProjectPath is not null)
+                .ThenByDescending(p => p.Mode == TiaPortalMode.WithUserInterface)
                 .ThenByDescending(p => p.Id)
                 .First();
             foreach (TiaPortalProcess p in processes)
                 _log.LogInformation("TIA process {Id} mode={Mode} project={Path}", p.Id, p.Mode, p.ProjectPath?.FullName);
+
+            // An explicit path always wins.
             if (!string.IsNullOrWhiteSpace(projectPath))
             {
                 foreach (TiaPortalProcess p in processes)
@@ -120,6 +124,65 @@ public sealed class TiaPortalService : IDisposable
         });
     }
 
+    // ── Project texts (translation round trip) ────────────────────────────────
+    // Covers EVERY text in the project - PLC block/network comments, free comments,
+    // interface and UDT member comments, tag comments, and all HMI texts - in one file.
+    // Far broader than editing block XML, which only reaches PLC objects.
+
+    public async Task<object> ExportProjectTextsAsync(string filePath, string sourceCulture, string targetCulture)
+    {
+        EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var fi = new FileInfo(filePath);
+            if (fi.Directory is not null) Directory.CreateDirectory(fi.Directory.FullName);
+            if (fi.Exists) fi.Delete();
+
+            _project!.ExportProjectTexts(
+                fi,
+                new System.Globalization.CultureInfo(sourceCulture),
+                new System.Globalization.CultureInfo(targetCulture));
+
+            fi.Refresh();
+            _log.LogInformation("Exported project texts {Src}->{Tgt} to {Path}",
+                sourceCulture, targetCulture, fi.FullName);
+            return (object)new { path = fi.FullName, bytes = fi.Exists ? fi.Length : 0 };
+        });
+    }
+
+    public async Task ImportProjectTextsAsync(string filePath, bool importAll)
+    {
+        EnsureConnected();
+        if (!File.Exists(filePath))
+            throw new FileNotFoundException($"Project texts file not found: {filePath}");
+
+        await _sta.RunAsync(() =>
+        {
+            _project!.ImportProjectTexts(new FileInfo(filePath), importAll);
+            _log.LogInformation("Imported project texts from {Path} (importAll={All})", filePath, importAll);
+        });
+    }
+
+    public async Task<object> GetLanguagesAsync()
+    {
+        EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var ls = _project!.LanguageSettings;
+            var active = new List<string>();
+            foreach (Language l in ls.ActiveLanguages) active.Add(l.Culture.Name);
+            var all = new List<string>();
+            foreach (Language l in ls.Languages) all.Add(l.Culture.Name);
+            return (object)new
+            {
+                editing   = ls.EditingLanguage?.Culture.Name,
+                reference = ls.ReferenceLanguage?.Culture.Name,
+                active,
+                available = all,
+            };
+        });
+    }
+
     public async Task SaveAsync()
     {
         EnsureConnected();
@@ -127,6 +190,22 @@ public sealed class TiaPortalService : IDisposable
         {
             _log.LogInformation("Saving project…");
             _project!.Save();
+        });
+    }
+
+    /// <summary>Project.SaveAs: writes a full copy (HMI included) and keeps the copy open.</summary>
+    public async Task<object> SaveProjectAsAsync(string folder)
+    {
+        EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            var dir = new DirectoryInfo(folder);
+            if (dir.Exists && dir.EnumerateFileSystemInfos().Any())
+                throw new InvalidOperationException($"'{folder}' exists and is not empty; choose a new folder.");
+            var from = _project!.Path?.FullName;
+            _log.LogInformation("Saving project as {Dir}…", folder);
+            _project.SaveAs(dir);
+            return (object)new { savedTo = _project.Path?.FullName, original = from, note = "TIA now has the copy open; the original file was not modified." };
         });
     }
 

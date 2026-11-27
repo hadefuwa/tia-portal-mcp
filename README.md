@@ -1,6 +1,6 @@
 # TIA Portal Dashboard
 
-A desktop app that lets you read and edit your TIA Portal (V19 or V20) project through a built-in browser window — no extra software or cloud connection needed. It connects to TIA Portal while it's running on your PC and opens a native Windows window at startup.
+A desktop app that lets you read and edit your TIA Portal (V19, V20 or V21) project through a built-in browser window — no extra software or cloud connection needed. It connects to TIA Portal while it's running on your PC and opens a native Windows window at startup.
 
 > **Who is this for?** Anyone working with Siemens S7 PLCs who wants a faster way to browse blocks, view/edit SCL code, inspect tag tables, and manage their project — without clicking through TIA Portal menus. It also exposes all tools to Claude AI via MCP so you can describe changes in plain English and have Claude implement them.
 
@@ -60,7 +60,7 @@ Both modes talk to the same REST server and the same TIA Portal connection.
 Before you start, make sure you have:
 
 - **Windows 10 or 11** (TIA Portal only runs on Windows)
-- **Siemens TIA Portal V19 or V20** installed and licensed
+- **Siemens TIA Portal V19, V20 or V21** installed and licensed
 - **Your account added to the `Siemens TIA Openness` Windows group** (see setup step 3)
 - **Microsoft Edge** installed (comes with Windows 10/11 — needed for the built-in browser window)
 - **.NET Framework 4.8** — already included in Windows 10/11, nothing to install
@@ -104,7 +104,7 @@ TIA Portal requires your Windows account to be in a specific security group befo
 
 ### 4. Run the dashboard
 
-1. Open your project in **TIA Portal (V19 or V20)**
+1. Open your project in **TIA Portal (V19, V20 or V21)**
 2. Double-click `TiaPortalDashboard.exe`
 3. A native desktop window opens with the dashboard inside it
 4. Click **Connect to TIA Portal** — the dashboard reads your open project
@@ -245,7 +245,7 @@ Your project has UDT changes that haven't been compiled. In TIA Portal, press **
 This is handled automatically by the clone feature. If you see it in other operations, disconnect from TIA Portal and reconnect.
 
 **Build fails with "Siemens.Engineering.dll not found"**
-Pick the TIA version when you build: `-p:TiaVersion=19` or `-p:TiaVersion=20` (required, there is no default). The project reads the DLLs from `C:Program FilesSiemensAutomationPortal V<version>`; if TIA is installed elsewhere, edit `TiaApiDir` in the `.csproj`.
+Pick the TIA version when you build: `-p:TiaVersion=19`, `20` or `21` (required, there is no default). The project reads the DLLs from `C:Program FilesSiemensAutomationPortal V<version>`; if TIA is installed elsewhere, edit `TiaApiDir` in the `.csproj`.
 
 **The window doesn't open / WebView2 error**
 Make sure Microsoft Edge is installed and up to date. The built-in browser window uses the Edge WebView2 runtime, which ships with Edge on Windows 10/11.

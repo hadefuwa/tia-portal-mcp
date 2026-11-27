@@ -6,7 +6,7 @@ Project-level guidance for Claude Code working in this repo.
 
 ## What this project is
 
-A .NET Framework 4.8 app that exposes TIA Portal (V19 or V20, chosen at build time) as an MCP server. Two transports:
+A .NET Framework 4.8 app that exposes TIA Portal (V19, V20 or V21, chosen at build time) as an MCP server. Two transports:
 
 - **HTTP** — dashboard window running at `http://localhost:5000`. Used by Claude Desktop (via Custom Connectors UI) and direct REST calls.
 - **stdio** — headless mode (`--mcp-stdio` flag). Used by Claude Code, Cursor, VS Code Copilot. The repo-root `.mcp.json` points to the exe with this flag.
@@ -17,7 +17,7 @@ Both transports share the same `HandleMcpRequest` method in `Program.cs`.
 
 ## Build and run
 
-**TIA version switch.** One shared source tree targets both versions. `-p:TiaVersion=19` or `-p:TiaVersion=20` (required, no default; the build fails without it) selects the Siemens DLL folder, the `TIA_V19`/`TIA_V20` constant, `TiaVersion.Name` (written into generated XML as `<Engineering version>`) and the runtime assembly search paths. Each version builds into its own folders (`bin\V19\Release\net48`, `bin\V20\Release\net48`, and matching `obj\V19`/`obj\V20`), so switching version never needs a clean and both builds can sit side by side. Point `.mcp.json` and your shortcut at the version you use. Findings below marked V19/V20 were only tested on that version; V20 was last built before the V19 port, so re-check it on a V20 machine.
+**TIA version switch.** One shared source tree targets both versions. `-p:TiaVersion=19`, `20` or `21` (required, no default; the build fails without it) selects the Siemens DLL folder, the `TIA_V19`/`TIA_V20` constant, `TiaVersion.Name` (written into generated XML as `<Engineering version>`) and the runtime assembly search paths. Each version builds into its own folders (`bin\V19\Release\net48`, `bin\V20\Release\net48`, and matching `obj\V19`/`obj\V20`), so switching version never needs a clean and both builds can sit side by side. Point `.mcp.json` and your shortcut at the version you use. Findings below marked V19/V20 were only tested on that version; V20 was last built before the V19 port, so re-check it on a V20 machine.
 
 ```powershell
 dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:TiaVersion=20
@@ -313,3 +313,13 @@ try {
 `--profile lite|standard|full|readonly` (or `TIA_MCP_PROFILE`) trims the advertised tools; `--annotations` (or `TIA_MCP_ANNOTATIONS=1`) adds `readOnlyHint`/`destructiveHint` to `tools/list`. Both are opt-in; the default is `full`, no annotations.
 
 Verified over stdio: default 39 tools with no `annotations` field; `readonly` exposes 20 look-only tools; `--annotations` marks 20 read-only and 7 destructive; a `tools/call` for a tool outside the profile (e.g. `write_block_scl` under `readonly`) is rejected. `import_tag_table` uses `ImportOptions.Override` (replaces an existing table), so it stays in the destructive set. `create_lad_block` only replaces a block with `overwrite:true`, so it is not marked destructive.
+
+---
+
+## V21 and the merged V21 repo
+
+The former `tia-portal-mcp-v21` repo is merged in, so `-p:TiaVersion=21` builds from this tree. V21 splits the Openness DLLs (`Siemens.Engineering.Base`, `.WinCCUnified`, `.Step7` under `PublicAPI\V21\net48`); the csproj picks the right set. **The V21 build has not been compiled or run from this merge** (no V21 install on the dev machine): build it on a V21 machine first.
+
+Tools that came with it (the V21 repo marked them untested against TIA): `read_hmi_screen`, `set_hmi_screen_item`, `copy_hmi_screen_item`, `dynamize_hmi_screen_item`, `set_hmi_item_event_script`, `relink_hmi_tags`, `save_project_as`, plus PLC data type tools and `COMMENTING_PROMPT.md`. The write tools take `dryRun` and need `confirm:true` for a real run; use `save_project_as` for a scratch copy first.
+
+`ExpressionDynamization` is not in the V19 API: on a V19 build the `visibilityExpression` edit reports "not available" and expression dynamizations are skipped by read/copy (`#if TIA_V19` in `HmiScreenEditService.cs`). `connect` now prefers a TIA process that has a project open, then one with a UI, then the newest.
