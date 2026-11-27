@@ -337,7 +337,7 @@ public sealed class HmiScreenBuildService
         }
         if (s.TryGetProperty("font", out var font)) ApplyFont(item, font.GetString()!, applied, notApplied);
         if (item.GetType().GetProperty("VerticalTextAlignment") != null)
-            SetEnumAny(item, new[] { "VerticalTextAlignment" }, new[] { "Top" }, applied, notApplied);
+            SetEnumAny(item, new[] { "VerticalTextAlignment" }, new[] { item.GetType().Name == "HmiText" ? "Top" : "Center" }, applied, notApplied);
     }
 
     // "Siemens Sans 11 bold" -> name, size, weight
@@ -364,6 +364,18 @@ public sealed class HmiScreenBuildService
     private static void ApplyBinding(HmiScreenItemBase item, JsonElement b, Dictionary<string, string> pal, List<string> applied, List<string> notApplied)
     {
         var prop = b.GetProperty("property").GetString()!;
+        // {"property", "tag"}: a plain two-way tag link (e.g. an I/O field's ProcessValue).
+        if (b.TryGetProperty("tag", out var directTag) && !b.TryGetProperty("expr", out _))
+        {
+            try
+            {
+                var td = item.Dynamizations.Find(prop) as TagDynamization ?? item.Dynamizations.Create<TagDynamization>(prop);
+                td.Tag = directTag.GetString();
+                applied.Add($"{prop}<-tag {td.Tag}");
+            }
+            catch (Exception ex) { notApplied.Add($"bind {prop}: {First(ex)}"); }
+            return;
+        }
         var expr = b.GetProperty("expr").GetString()!;
         var tags = b.TryGetProperty("tags", out var tg) ? tg.EnumerateArray().Select(x => x.GetString()!).ToList() : new List<string>();
         try
