@@ -75,7 +75,7 @@ var standardTools = new HashSet<string>(liteTools, StringComparer.OrdinalIgnoreC
     "list_hmi_screens", "get_screen_tag_refs", "update_faceplate_tags",
     "list_hmi_connections", "list_hmi_screen_items", "build_hmi_screen",
     "delete_hmi_screen", "delete_hmi_tags", "compile_hmi",
-    "check_hmi_layout", "bind_hmi_tag", "set_hmi_colour_map",
+    "check_hmi_layout", "bind_hmi_tag", "set_hmi_colour_map", "set_hmi_screen_script",
     "describe_object", "get_object_attributes",
 };
 
@@ -871,7 +871,9 @@ async Task<object?> McpDispatch(JsonElement p)
         case "bind_hmi_tag":         return await hmiScreenSvc.BindTagAsync(A("device"), A("screen"), A("item"), A("property"), A("tag"));
         case "set_hmi_colour_map":
             return await hmiScreenSvc.SetColourMapAsync(A("device"), A("screen"), A("item"), A("property"),
-                AList<HmiColourMapEntry>("entries").Select(e => (e.Value, e.Color)).ToList());
+                AList<HmiColourMapEntry>("entries").Select(e => (e.Value, e.To, e.Color, e.Flashing)).ToList());
+        case "set_hmi_screen_script":
+            return await hmiScreenSvc.SetScreenScriptAsync(A("device"), A("screen"), A("event"), A("code"));
         case "delete_hmi_screen":    return await hmiScreenSvc.DeleteScreenAsync(A("device"), A("screen"));
         case "delete_hmi_tags":      return await hmiSvc.DeleteTagsAsync(A("device"), A("table"), AList<string>("names"));
         case "compile_hmi":          return await hmiScreenSvc.CompileHmiAsync(A("device"));
@@ -1136,8 +1138,15 @@ List<object> McpToolDefs() => new()
         McpP("item", "string", true, "Item name"),
         McpP("property", "string", true, "Dynamized property, e.g. BackColor"),
         McpPArr("entries", true, "Value to colour entries",
-            McpP("value", "string", true, "Tag value, e.g. \"1\""),
-            McpP("color", "string", true, "Colour as #RRGGBB"))),
+            McpP("value", "string", true, "Tag value (start of range), e.g. \"1\""),
+            McpP("to", "string", false, "End of range; omit for the single value"),
+            McpP("color", "string", true, "Property value: colour #RRGGBB, true/false (Visible) or a number"),
+            McpP("flashing", "string", false, "slow | medium | fast: flash while this entry is active"))),
+    McpT("set_hmi_screen_script", "Sets the JavaScript of a screen event (Loaded or Unloaded), e.g. to start a timer that animates items. Runs the TIA syntax check. Unverified on V19: save the project first.",
+        McpP("device", "string", true, "HMI device name"),
+        McpP("screen", "string", true, "Screen name"),
+        McpP("event", "string", true, "Loaded or Unloaded"),
+        McpP("code", "string", true, "Unified JavaScript")),
     McpT("build_hmi_screen",
         "Creates (create:true) or fills a WinCC Unified HMI screen. clear:true deletes the screen's existing items first. "
       + "Item types: iofield, textbox, button, rectangle, circle, toggleswitch, or any widget class name (e.g. Slider). "
@@ -1161,7 +1170,8 @@ List<object> McpToolDefs() => new()
             McpP("text",         "string",  false, "Caption, wrapped as <body><p>…</p></body>"),
             McpP("processValue", "string",  false, "HMI tag shown or edited by an iofield"),
             McpP("ioType",       "string",  false, "Input | Output | InputOutput. Output = read-only display, no keyboard"),
-            McpP("onTap",        "string",  false, "Button only: Unified JavaScript run on tap, e.g. Tags(\"BC_Pattern\").Write(3); A syntax check is run and reported"),
+            McpPArrOf("points",  "integer", false, "polygon/polyline only (type \"Polygon\" or \"Polyline\"): flat list x1,y1,x2,y2,... in screen pixels. Set BackColor, BorderColor, BorderWidth in attributes"),
+            McpP("onTap",        "string",  false,"Button only: Unified JavaScript run on tap, e.g. Tags(\"BC_Pattern\").Write(3); A syntax check is run and reported"),
             McpP("attributes",   "object",  false, "Extra attributes, e.g. {\"FontSize\":18,\"BackColor\":\"#003366\",\"Enabled\":false}"))),
     McpT("delete_hmi_screen", "Deletes an HMI screen. Destructive.",
         McpP("device", "string", true, "HMI device name"),

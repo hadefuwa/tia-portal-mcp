@@ -337,7 +337,7 @@ public sealed class HmiScreenService
     /// value (From = To = value), so the property takes the matching value, e.g. a colour. Existing entries are
     /// replaced. Created via reflection on the generic Entries.Create&lt;MappingTableEntryRange&gt;(). UNVERIFIED on V19.</summary>
     public async Task<object> SetColourMapAsync(string deviceName, string screenName, string itemName, string property,
-        List<(string Value, string Color)> entries)
+        List<(string Value, string? To, string Color, string? Flashing)> entries)
     {
         _tia.EnsureConnected();
         return await _sta.RunAsync(() =>
@@ -395,7 +395,7 @@ public sealed class HmiScreenService
             }
 
             var done = new List<object>();
-            foreach (var (value, color) in entries)
+            foreach (var (value, to, color, flashing) in entries)
             {
                 var entry = create.MakeGenericMethod(entryType).Invoke(entryComp, null)
                     ?? throw new InvalidOperationException("Create returned null.");
@@ -413,12 +413,25 @@ public sealed class HmiScreenService
                     throw new InvalidOperationException($"Could not set {prop}={candidates[0]}. Tried " + string.Join(" | ", errs));
                 }
                 var num = double.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
-                SetAny("From", (int)num, (uint)num, (byte)num, num, value);
-                SetAny("To", (int)num, (uint)num, (byte)num, num, value);
+                var numTo = double.Parse(to ?? value, System.Globalization.CultureInfo.InvariantCulture);
+                SetAny("From", (int)num, num, value);
+                SetAny("To", (int)numTo, numTo, to ?? value);
                 var rt = entryType.GetProperty("RangeType");
                 if (rt is not null && rt.CanWrite) rt.SetValue(entry, Enum.Parse(rt.PropertyType, "Range"));
-                SetAny("Value", System.Drawing.ColorTranslator.FromHtml(color), color);
-                done.Add(new { value, color });
+                // Value: boolean ("true"/"false", e.g. Visible), colour ("#RRGGBB") or a plain number/text.
+                if (bool.TryParse(color, out var bv)) SetAny("Value", bv);
+                else if (color.StartsWith("#")) SetAny("Value", System.Drawing.ColorTranslator.FromHtml(color), color);
+                else if (double.TryParse(color, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var nv))
+                    SetAny("Value", nv, color);
+                else SetAny("Value", color);
+                if (!string.IsNullOrEmpty(flashing))
+                {
+                    var fl = entryType.GetProperty("Flashing")!;
+                    var fr = entryType.GetProperty("FlashingRate")!;
+                    fl.SetValue(entry, true);
+                    fr.SetValue(entry, Enum.Parse(fr.PropertyType, flashing, true));
+                }
+                done.Add(new { value, to = to ?? value, color });
             }
             return (object)new { item = itemName, property, status = "mapped", entries = done };
           }
@@ -427,6 +440,56 @@ public sealed class HmiScreenService
               var inner = tie.InnerException;
               throw new InvalidOperationException((inner?.GetType().Name ?? "Error") + ": " + (inner?.Message ?? tie.Message), inner);
           }
+        });
+    }
+
+    // Lists the messages of an HmiValidationResult (Errors / Warnings are compositions of message objects).
+    private static List<string> DescribeValidation(object? result, string listName)
+    {
+        var list = new List<string>();
+        if (result is null) return list;
+        var coll = result.GetType().GetProperty(listName)?.GetValue(result) as System.Collections.IEnumerable;
+        if (coll is null) return list;
+        foreach (var m in coll)
+        {
+            string? text = null;
+            foreach (var pn in new[] { "Message", "Description", "Text" })
+            {
+                text = m.GetType().GetProperty(pn)?.GetValue(m)?.ToString();
+                if (!string.IsNullOrEmpty(text)) break;
+            }
+            list.Add(text ?? m.ToString() ?? "(unknown)");
+        }
+        return list;
+    }
+
+    // ── Screen event script (Loaded / Unloaded) ───────────────────────────────
+
+    /// <summary>Sets the JavaScript of a screen event (Loaded or Unloaded), e.g. to start a timer that animates items.
+    /// Runs the TIA syntax check and reports its output. UNVERIFIED on V19.</summary>
+    public async Task<object> SetScreenScriptAsync(string deviceName, string screenName, string eventName, string code)
+    {
+        _tia.EnsureConnected();
+        return await _sta.RunAsync(() =>
+        {
+            try
+            {
+                var hmi = GetHmiSoftware(deviceName);
+                var screen = FindScreen(hmi, screenName)
+                    ?? throw new KeyNotFoundException($"HMI screen '{screenName}' not found.");
+                var evType = (HmiScreenEventType)Enum.Parse(typeof(HmiScreenEventType), eventName, true);
+                var handlers = screen.EventHandlers;
+                var h = handlers.Find(evType) ?? handlers.Create(evType);
+                h.Script.ScriptCode = code;
+                var check = h.Script.SyntaxCheck();
+                var errs = DescribeValidation(check, "Errors");
+                var warns = DescribeValidation(check, "Warnings");
+                return (object)new { screen = screen.Name, @event = evType.ToString(), syntaxOk = errs.Count == 0, errors = errs, warnings = warns };
+            }
+            catch (System.Reflection.TargetInvocationException tie)
+            {
+                throw new InvalidOperationException(tie.InnerException?.Message ?? tie.Message, tie.InnerException);
+            }
         });
     }
 
@@ -598,10 +661,28 @@ public sealed class HmiScreenService
                         _ => CreateByTypeName(screen, spec.Type, spec.Name),
                     };
 
-                    Try(errors, "Left",   () => item.SetAttribute("Left",   spec.Left));
-                    Try(errors, "Top",    () => item.SetAttribute("Top",    spec.Top));
-                    Try(errors, "Width",  () => item.SetAttribute("Width",  spec.Width));
-                    Try(errors, "Height", () => item.SetAttribute("Height", spec.Height));
+                    if (spec.Points is { Count: >= 4 })
+                        Try(errors, "Points", () =>
+                        {
+                            var pts = item.GetType().GetProperty("Points")?.GetValue(item)
+                                ?? throw new InvalidOperationException($"{item.GetType().Name} has no Points.");
+                            var add = pts.GetType().GetMethod("Create", new[] { typeof(int), typeof(int) })
+                                ?? throw new InvalidOperationException("Points has no Create(int,int).");
+                            // A new polygon/polyline starts with default points. A shape needs a minimum number of
+                            // points, so add the new ones first and only then delete the defaults.
+                            var defaults = ((System.Collections.IEnumerable)pts).Cast<object>().ToList();
+                            for (int p = 0; p + 1 < spec.Points.Count; p += 2)
+                                add.Invoke(pts, new object[] { spec.Points[p], spec.Points[p + 1] });
+                            foreach (var old in defaults)
+                                old.GetType().GetMethod("Delete")?.Invoke(old, null);
+                        });
+                    else
+                    {
+                        Try(errors, "Left",   () => item.SetAttribute("Left",   spec.Left));
+                        Try(errors, "Top",    () => item.SetAttribute("Top",    spec.Top));
+                        Try(errors, "Width",  () => item.SetAttribute("Width",  spec.Width));
+                        Try(errors, "Height", () => item.SetAttribute("Height", spec.Height));
+                    }
 
                     if (spec.Text is not null)
                         Try(errors, "Text", () => SetText(item, "Text", spec.Text));
@@ -620,10 +701,9 @@ public sealed class HmiScreenService
                             var h = btn.EventHandlers.Find(HmiButtonEventType.Tapped)
                                     ?? btn.EventHandlers.Create(HmiButtonEventType.Tapped);
                             h.Script.ScriptCode = spec.OnTap;
-                            var check = h.Script.SyntaxCheck();
-                            var text = check?.ToString() ?? "";
-                            if (check is not null && text.IndexOf("rror", StringComparison.OrdinalIgnoreCase) >= 0)
-                                throw new InvalidOperationException("script syntax check: " + text);
+                            var errs = DescribeValidation(h.Script.SyntaxCheck(), "Errors");
+                            if (errs.Count > 0)
+                                throw new InvalidOperationException("script syntax check: " + string.Join("; ", errs));
                         });
 
                     if (spec.Attributes is not null)

@@ -66,6 +66,8 @@ public sealed record HmiScreenItemSpec
     public string? IoType { get; init; }
     /// <summary>Extra attributes applied with SetAttribute (string, number, bool). Errors are reported, not fatal.</summary>
     public Dictionary<string, object?>? Attributes { get; init; }
+    /// <summary>polygon / polyline only: flat list x1,y1,x2,y2,... in screen pixels.</summary>
+    public List<int>? Points { get; init; }
 }
 
 public sealed record HmiScreenBuildRequest
@@ -82,8 +84,12 @@ public sealed record HmiColourMapEntry
 {
     /// <summary>Tag value that selects this entry, e.g. "1".</summary>
     public required string Value { get; init; }
-    /// <summary>Property value for that tag value, e.g. a colour "#FF0000".</summary>
+    /// <summary>Optional end of the range; omitted = the single value above.</summary>
+    public string? To { get; init; }
+    /// <summary>Property value for that tag value: a colour "#FF0000", "true"/"false" (e.g. Visible) or a number.</summary>
     public required string Color { get; init; }
+    /// <summary>Optional: slow | medium | fast makes the property flash while this entry is active.</summary>
+    public string? Flashing { get; init; }
 }
 
 public sealed record FaceplateTagUpdate
