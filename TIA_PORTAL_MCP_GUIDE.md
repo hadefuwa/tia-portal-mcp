@@ -564,7 +564,7 @@ The exe is locked while running. Kill it first, then build:
 
 ```powershell
 taskkill /F /IM TiaPortalDashboard.exe
-dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release
+dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:TiaVersion=19
 .\src\TiaOpennessMcpServer\bin\Release\net48\TiaPortalDashboard.exe
 ```
 

@@ -82,7 +82,7 @@ cd tia-portal-mcp
 ### 2. Build the project
 
 ```bash
-dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release
+dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:TiaVersion=19
 ```
 
 The output goes to:
@@ -141,7 +141,7 @@ Claude Code, Cursor, and VS Code Copilot use **stdio transport** — they spawn 
 ### Step 1 — Build the exe
 
 ```bash
-dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release
+dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:TiaVersion=19
 ```
 
 ### Step 2 — Add to `~/.claude/.mcp.json`
@@ -245,7 +245,7 @@ Your project has UDT changes that haven't been compiled. In TIA Portal, press **
 This is handled automatically by the clone feature. If you see it in other operations, disconnect from TIA Portal and reconnect.
 
 **Build fails with "Siemens.Engineering.dll not found"**
-The project builds against TIA Portal V19 by default (`C:Program FilesSiemensAutomationPortal V19`). For V20 build with `-p:TiaVersion=20`. If TIA is installed elsewhere, edit `TiaApiDir` in the `.csproj`.
+Pick the TIA version when you build: `-p:TiaVersion=19` or `-p:TiaVersion=20` (required, there is no default). The project reads the DLLs from `C:Program FilesSiemensAutomationPortal V<version>`; if TIA is installed elsewhere, edit `TiaApiDir` in the `.csproj`.
 
 **The window doesn't open / WebView2 error**
 Make sure Microsoft Edge is installed and up to date. The built-in browser window uses the Edge WebView2 runtime, which ships with Edge on Windows 10/11.
@@ -274,7 +274,7 @@ The `<MultilingualText>` comment blocks in SimaticML XML include a `<Culture>` t
 The desktop shortcut (`Start TIA Dashboard.bat`) automatically checks whether any source file (`.cs`, `.csproj`, `dashboard.html`) is newer than the compiled exe and rebuilds before launching. If the build fails, the bat window will pause and show the error — fix it and run the shortcut again. To build manually:
 
 ```bash
-dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj --configuration Release
+dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj --configuration Release -p:TiaVersion=19
 ```
 
 ---
