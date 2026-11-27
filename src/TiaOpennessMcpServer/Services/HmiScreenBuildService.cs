@@ -169,6 +169,7 @@ public sealed class HmiScreenBuildService
                         try { SetMl(item, "Text", tx.GetString()!); applied.Add("Text"); }
                         catch (Exception ex) { notApplied.Add("Text: " + First(ex)); }
                     }
+                    if (o.TryGetProperty("move", out var mv)) ApplyMove(item, o, mv, applied, notApplied);
                     if (o.TryGetProperty("bind", out var binds))
                         foreach (var b in binds.EnumerateArray()) ApplyBinding(item, b, palette, applied, notApplied);
                     if (o.TryGetProperty("events", out var evs))
@@ -267,7 +268,15 @@ public sealed class HmiScreenBuildService
         double alpha = s.TryGetProperty("alpha", out var a) ? a.GetDouble() : 1.0;
         bool open = item.GetType().Name is "HmiLine" or "HmiPolyline";
         if (s.TryGetProperty("back", out var back) && !open)
-            SetAny(item, new[] { "BackColor" }, ParseColor(back.GetString()!, alpha), applied, notApplied);
+        {
+            var bv = back.GetString()!;
+            if (bv.Equals("transparent", StringComparison.OrdinalIgnoreCase) && item.GetType().GetProperty("BackFillPattern") != null)
+                SetEnumAny(item, new[] { "BackFillPattern" }, new[] { "Transparent" }, applied, notApplied);
+            else
+                SetAny(item, new[] { "BackColor" }, ParseColor(bv, 1), applied, notApplied);
+        }
+        if (alpha < 1 && item.GetType().GetProperty("Opacity") != null)
+            SetAny(item, new[] { "Opacity" }, (float)alpha, applied, notApplied);
         if (s.TryGetProperty("border", out var border))
             SetAny(item, open ? new[] { "LineColor", "BorderColor" } : new[] { "BorderColor", "LineColor" }, ParseColor(border.GetString()!, 1), applied, notApplied);
         if (s.TryGetProperty("lineWidth", out var lw))
@@ -278,8 +287,16 @@ public sealed class HmiScreenBuildService
             SetAny(item, new[] { "BorderWidth" }, 0, applied, notApplied);
         if (s.TryGetProperty("radius", out var rad) && item.GetType().Name == "HmiRectangle")
         {
-            if (item.GetType().GetProperty("CornerRadius") != null) SetAny(item, new[] { "CornerRadius" }, rad.GetInt32(), applied, notApplied);
-            else { SetAny(item, new[] { "RadiusX" }, rad.GetInt32(), applied, notApplied); SetAny(item, new[] { "RadiusY" }, rad.GetInt32(), applied, notApplied); }
+            var corners = Get(item, "Corners");
+            if (corners != null)
+            {
+                var sub = new List<string>(); var bad = new List<string>();
+                foreach (var c in new[] { "TopLeftRadius", "TopRightRadius", "BottomLeftRadius", "BottomRightRadius" })
+                    SetAny(corners, new[] { c }, (uint)rad.GetInt32(), sub, bad);
+                if (bad.Count == 0) applied.Add($"Corners={rad.GetInt32()}"); else notApplied.AddRange(bad.Select(x => "Corners." + x));
+            }
+            else if (item.GetType().GetProperty("CornerRadius") != null) SetAny(item, new[] { "CornerRadius" }, rad.GetInt32(), applied, notApplied);
+            else notApplied.Add("radius: no Corners part");
         }
         if (s.TryGetProperty("dash", out var dash) && dash.GetBoolean())
             SetEnumAny(item, new[] { "DashType", "LineDashType", "BorderStyle", "LineStyle" }, new[] { "Dash", "Dashed", "DashDot" }, applied, notApplied);
@@ -291,6 +308,8 @@ public sealed class HmiScreenBuildService
             SetEnumAny(item, new[] { "HorizontalTextAlignment", "TextAlignmentHorizontal", "AlignmentHorizontal", "HorizontalAlignment" }, new[] { cand }, applied, notApplied);
         }
         if (s.TryGetProperty("font", out var font)) ApplyFont(item, font.GetString()!, applied, notApplied);
+        if (item.GetType().GetProperty("VerticalTextAlignment") != null)
+            SetEnumAny(item, new[] { "VerticalTextAlignment" }, new[] { "Top" }, applied, notApplied);
     }
 
     // "Siemens Sans 11 bold" -> name, size, weight
@@ -301,8 +320,10 @@ public sealed class HmiScreenBuildService
         var m = Regex.Match(spec, @"^(.*?)\s+(\d+)(\s+bold)?$", RegexOptions.IgnoreCase);
         if (!m.Success) { notApplied.Add("Font: bad spec " + spec); return; }
         var sub = new List<string>(); var bad = new List<string>();
-        SetAny(f, new[] { "Name", "FontName", "Family" }, m.Groups[1].Value, sub, bad);
-        SetAny(f, new[] { "Size", "FontSize" }, int.Parse(m.Groups[2].Value), sub, bad);
+        var fname = m.Groups[1].Value.Replace(" ", "");
+        if (f.GetType().GetProperty("Name")?.PropertyType.IsEnum == true) SetEnumAny(f, new[] { "Name" }, new[] { fname, "SiemensSans" }, sub, bad);
+        else SetAny(f, new[] { "Name", "FontName", "Family" }, m.Groups[1].Value, sub, bad);
+        SetAny(f, new[] { "Size", "FontSize" }, float.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture), sub, bad);
         if (m.Groups[3].Success) SetEnumAny(f, new[] { "Weight", "FontWeight" }, new[] { "Bold" }, sub, bad);
         applied.AddRange(sub.Select(x => "Font." + x)); notApplied.AddRange(bad.Select(x => "Font." + x));
     }
@@ -347,6 +368,21 @@ public sealed class HmiScreenBuildService
             applied.Add($"{prop}<-script{(trig.Length > 0 ? " [" + trig + "]" : "")}");
         }
         catch (Exception ex) { notApplied.Add($"bind {prop}: {First(ex)}"); }
+    }
+
+    // Native movement (no script): the item slides from its map position (tag = start) to map position + (dx, dy) (tag = end).
+    private static void ApplyMove(HmiScreenItemBase item, JsonElement o, JsonElement mv, List<string> applied, List<string> notApplied)
+    {
+        var part = Get(item, "LinearMovement");
+        if (part == null) { notApplied.Add("move: no LinearMovement part"); return; }
+        var r = o.GetProperty("rect").EnumerateArray().Select(x => x.GetInt32()).ToArray();
+        var sub = new List<string>(); var bad = new List<string>();
+        SetAny(part, new[] { "Tag" }, mv.GetProperty("tag").GetString()!, sub, bad);
+        SetAny(part, new[] { "TagRangeStart" }, mv.GetProperty("start").GetDouble(), sub, bad);
+        SetAny(part, new[] { "TagRangeEnd" }, mv.GetProperty("end").GetDouble(), sub, bad);
+        SetAny(part, new[] { "TargetPositionX" }, r[0] + (mv.TryGetProperty("dx", out var dx) ? dx.GetInt32() : 0), sub, bad);
+        SetAny(part, new[] { "TargetPositionY" }, r[1] + (mv.TryGetProperty("dy", out var dy) ? dy.GetInt32() : 0), sub, bad);
+        if (bad.Count == 0) applied.Add($"LinearMovement<-{mv.GetProperty("tag").GetString()}"); else notApplied.AddRange(bad.Select(x => "LinearMovement." + x));
     }
 
     private static void ApplyEvent(HmiScreenItemBase item, JsonElement e, List<int>? phases, List<string> applied, List<string> notApplied)
