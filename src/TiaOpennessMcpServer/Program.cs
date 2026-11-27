@@ -14,13 +14,8 @@ using TiaOpennessMcpServer.Services;
 using TiaOpennessMcpServer.Utilities;
 
 // ── Assembly resolver — must run before any Siemens type is referenced ────────
-string[] TiaSearchPaths = new[]
-{
-    @"C:\Program Files\Siemens\Automation\Portal V19\PublicAPI\V19",
-    @"C:\Program Files\Siemens\Automation\Portal V19\Bin\PublicAPI",
-    @"C:\Program Files\Siemens\Automation\Portal V19\Bin\PublicAPI\Client",
-    @"C:\Program Files\Siemens\Automation\Portal V19\Bin",
-};
+string[] TiaSearchPaths = TiaVersion.SearchPaths;
+LadXmlBuilder.EngineeringVersion = TiaVersion.Name;
 AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
 {
     var n = new AssemblyName(e.Name).Name!;
@@ -962,7 +957,7 @@ string McpToolName(object def) =>
 
 List<object> McpToolDefs() => new()
 {
-    McpT("connect_to_tia_portal", "Attaches to a running TIA Portal V20 process with an open project.",
+    McpT("connect_to_tia_portal", "Attaches to a running TIA Portal process (the version this server was built for) with an open project.",
         McpP("projectPath", "string", false, "Optional project path to prefer a specific instance")),
     McpT("get_status",   "Returns connection state and details about the currently open TIA Portal project."),
     McpT("save_project", "Saves the currently open TIA Portal project."),

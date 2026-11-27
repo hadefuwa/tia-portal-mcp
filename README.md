@@ -60,7 +60,7 @@ Both modes talk to the same REST server and the same TIA Portal connection.
 Before you start, make sure you have:
 
 - **Windows 10 or 11** (TIA Portal only runs on Windows)
-- **Siemens TIA Portal V20** installed and licensed
+- **Siemens TIA Portal V19 or V20** installed and licensed
 - **Your account added to the `Siemens TIA Openness` Windows group** (see setup step 3)
 - **Microsoft Edge** installed (comes with Windows 10/11 — needed for the built-in browser window)
 - **.NET Framework 4.8** — already included in Windows 10/11, nothing to install
@@ -245,7 +245,7 @@ Your project has UDT changes that haven't been compiled. In TIA Portal, press **
 This is handled automatically by the clone feature. If you see it in other operations, disconnect from TIA Portal and reconnect.
 
 **Build fails with "Siemens.Engineering.dll not found"**
-The project expects TIA Portal V20 at the default path (`C:\Program Files\Siemens\Automation\Portal V20`). If yours is installed elsewhere, update the `HintPath` entries in the `.csproj` file.
+The project builds against TIA Portal V19 by default (`C:Program FilesSiemensAutomationPortal V19`). For V20 build with `-p:TiaVersion=20`. If TIA is installed elsewhere, edit `TiaApiDir` in the `.csproj`.
 
 **The window doesn't open / WebView2 error**
 Make sure Microsoft Edge is installed and up to date. The built-in browser window uses the Edge WebView2 runtime, which ships with Edge on Windows 10/11.

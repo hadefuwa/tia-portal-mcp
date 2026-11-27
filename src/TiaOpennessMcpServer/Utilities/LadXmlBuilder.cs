@@ -108,6 +108,9 @@ public sealed class LadValidationException : Exception
 /// </summary>
 public static class LadXmlBuilder
 {
+    /// <summary>Written to the Engineering version attribute. Program sets it to the build's TIA version; V20 is what the goldens were captured on.</summary>
+    public static string EngineeringVersion { get; set; } = "V20";
+
     public static readonly XNamespace FlgNs  = "http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v5";
     public static readonly XNamespace IfaceNs = "http://www.siemens.com/automation/Openness/SW/Interface/v5";
 
@@ -482,7 +485,7 @@ public static class LadXmlBuilder
 
         var doc = new XDocument(new XDeclaration("1.0", "utf-8", null),
             new XElement("Document",
-                new XElement("Engineering", new XAttribute("version", "V20")),
+                new XElement("Engineering", new XAttribute("version", EngineeringVersion)),
                 new XElement($"SW.Blocks.{type}", new XAttribute("ID", "0"), attrs, objects)));
 
         var xml = doc.Declaration + "\n" + doc.ToString();

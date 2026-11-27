@@ -2,7 +2,7 @@ namespace TiaOpennessMcpServer.Services;
 
 public sealed class TiaOpennessOptions
 {
-    public string Version                  { get; set; } = "V19";
+    public string Version                  { get; set; } = Utilities.TiaVersion.Name;
     public string DefaultMode              { get; set; } = "WithoutUserInterface";
     public int    ConnectionTimeoutSeconds { get; set; } = 60;
     public bool   AutoSaveOnDisconnect     { get; set; } = true;

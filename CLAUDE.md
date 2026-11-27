@@ -6,7 +6,7 @@ Project-level guidance for Claude Code working in this repo.
 
 ## What this project is
 
-A .NET Framework 4.8 app that exposes TIA Portal V20 as an MCP server. Two transports:
+A .NET Framework 4.8 app that exposes TIA Portal (V19 or V20, chosen at build time) as an MCP server. Two transports:
 
 - **HTTP** — dashboard window running at `http://localhost:5000`. Used by Claude Desktop (via Custom Connectors UI) and direct REST calls.
 - **stdio** — headless mode (`--mcp-stdio` flag). Used by Claude Code, Cursor, VS Code Copilot. The repo-root `.mcp.json` points to the exe with this flag.
@@ -16,6 +16,12 @@ Both transports share the same `HandleMcpRequest` method in `Program.cs`.
 ---
 
 ## Build and run
+
+**TIA version switch.** One shared source tree targets both versions. `-p:TiaVersion=19` (default) or `-p:TiaVersion=20` selects the Siemens DLL folder, the `TIA_V19`/`TIA_V20` constant, `TiaVersion.Name` (written into generated XML as `<Engineering version>`) and the runtime assembly search paths. After switching version, delete `src/TiaOpennessMcpServer/obj` and `bin` and rebuild. Findings below marked V19/V20 were only tested on that version; V20 was last built before the V19 port, so re-check it on a V20 machine.
+
+```powershell
+dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:TiaVersion=20
+```
 
 ```powershell
 # Build
