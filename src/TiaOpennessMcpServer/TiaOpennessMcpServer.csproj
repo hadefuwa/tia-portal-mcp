@@ -15,6 +15,9 @@
     <!-- Pass -p:TiaVersion=19 or -p:TiaVersion=20 (required, no default) -->
     <DefineConstants>$(DefineConstants);TIA_V$(TiaVersion)</DefineConstants>
     <TiaApiDir>$(PROGRAMFILES)\Siemens\Automation\Portal V$(TiaVersion)\PublicAPI\V$(TiaVersion)</TiaApiDir>
+    <!-- Separate output and intermediate folders per version, so switching never needs a clean -->
+    <OutputPath>bin\V$(TiaVersion)\$(Configuration)\</OutputPath>
+    <IntermediateOutputPath>obj\V$(TiaVersion)\$(Configuration)\</IntermediateOutputPath>
   </PropertyGroup>
 
   <ItemGroup>

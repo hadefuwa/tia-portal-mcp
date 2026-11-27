@@ -2,6 +2,8 @@
 
 Everything learned from live testing against TIA Portal V20. Read this before attempting any automation.
 
+> **Versions:** most findings below were captured on TIA Portal V20. The server now builds for V19 or V20 (`-p:TiaVersion=19` or `20`, required; output goes to `bin\V19` or `bin\V20`). V19-specific findings (HMI / WinCC Unified) are in `CLAUDE.md`. Re-check anything version-sensitive on your own version.
+
 Verified against the source on 2026-08-03. Where the code and this document disagreed, the code won —
 see **Known contradictions** at the end for the few points still unresolved.
 
@@ -64,7 +66,7 @@ per-project one under `projects`). This is where the server is actually register
   "mcpServers": {
     "tia-portal": {
       "type": "stdio",
-      "command": "C:\\Users\\HamedA\\Documents\\tia-portal-mcp\\src\\TiaOpennessMcpServer\\bin\\Release\\net48\\TiaPortalDashboard.exe",
+      "command": "C:\\Users\\HamedA\\Documents\\tia-portal-mcp\\src\\TiaOpennessMcpServer\\bin\\V19\\Release\\net48\\TiaPortalDashboard.exe",
       "args": ["--mcp-stdio"],
       "env": {}
     }
@@ -565,7 +567,7 @@ The exe is locked while running. Kill it first, then build:
 ```powershell
 taskkill /F /IM TiaPortalDashboard.exe
 dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:TiaVersion=19
-.\src\TiaOpennessMcpServer\bin\Release\net48\TiaPortalDashboard.exe
+.\src\TiaOpennessMcpServer\bin\V19\Release\net48\TiaPortalDashboard.exe
 ```
 
 The desktop shortcut (`Start TIA Dashboard.bat`) does this automatically — it checks whether any

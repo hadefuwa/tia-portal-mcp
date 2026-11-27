@@ -17,7 +17,7 @@ Both transports share the same `HandleMcpRequest` method in `Program.cs`.
 
 ## Build and run
 
-**TIA version switch.** One shared source tree targets both versions. `-p:TiaVersion=19` or `-p:TiaVersion=20` (required, no default; the build fails without it) selects the Siemens DLL folder, the `TIA_V19`/`TIA_V20` constant, `TiaVersion.Name` (written into generated XML as `<Engineering version>`) and the runtime assembly search paths. After switching version, delete `src/TiaOpennessMcpServer/obj` and `bin` and rebuild. Findings below marked V19/V20 were only tested on that version; V20 was last built before the V19 port, so re-check it on a V20 machine.
+**TIA version switch.** One shared source tree targets both versions. `-p:TiaVersion=19` or `-p:TiaVersion=20` (required, no default; the build fails without it) selects the Siemens DLL folder, the `TIA_V19`/`TIA_V20` constant, `TiaVersion.Name` (written into generated XML as `<Engineering version>`) and the runtime assembly search paths. Each version builds into its own folders (`bin\V19\Release\net48`, `bin\V20\Release\net48`, and matching `obj\V19`/`obj\V20`), so switching version never needs a clean and both builds can sit side by side. Point `.mcp.json` and your shortcut at the version you use. Findings below marked V19/V20 were only tested on that version; V20 was last built before the V19 port, so re-check it on a V20 machine.
 
 ```powershell
 dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:TiaVersion=20
@@ -28,10 +28,10 @@ dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:
 dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:TiaVersion=19
 
 # Run dashboard (HTTP + WinForms window)
-.\src\TiaOpennessMcpServer\bin\Release\net48\TiaPortalDashboard.exe
+.\src\TiaOpennessMcpServer\bin\V19\Release\net48\TiaPortalDashboard.exe
 
 # Run headless stdio MCP (for Claude Code)
-.\src\TiaOpennessMcpServer\bin\Release\net48\TiaPortalDashboard.exe --mcp-stdio
+.\src\TiaOpennessMcpServer\bin\V19\Release\net48\TiaPortalDashboard.exe --mcp-stdio
 ```
 
 The `.bat` shortcut on the desktop auto-detects source changes and rebuilds before launching.

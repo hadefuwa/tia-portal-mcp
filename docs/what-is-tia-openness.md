@@ -72,7 +72,7 @@ An open standard for exchanging hardware (CAx) data. Used when importing hardwar
 
 ## How this project uses Openness
 
-This dashboard uses the V20 API (`Siemens.Engineering.dll`) to:
+This dashboard uses the V19 or V20 API (chosen at build time) (`Siemens.Engineering.dll`) to:
 
 1. **Attach** to a running TIA Portal process with `TiaPortal.GetProcesses()[0].Attach()`
 2. **Read the project tree** — devices, blocks, tag tables

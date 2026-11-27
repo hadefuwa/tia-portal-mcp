@@ -1,6 +1,6 @@
 # TIA Portal Dashboard
 
-A desktop app that lets you read and edit your TIA Portal V20 project through a built-in browser window — no extra software or cloud connection needed. It connects to TIA Portal while it's running on your PC and opens a native Windows window at startup.
+A desktop app that lets you read and edit your TIA Portal (V19 or V20) project through a built-in browser window — no extra software or cloud connection needed. It connects to TIA Portal while it's running on your PC and opens a native Windows window at startup.
 
 > **Who is this for?** Anyone working with Siemens S7 PLCs who wants a faster way to browse blocks, view/edit SCL code, inspect tag tables, and manage their project — without clicking through TIA Portal menus. It also exposes all tools to Claude AI via MCP so you can describe changes in plain English and have Claude implement them.
 
@@ -87,7 +87,7 @@ dotnet build src/TiaOpennessMcpServer/TiaOpennessMcpServer.csproj -c Release -p:
 
 The output goes to:
 ```
-src/TiaOpennessMcpServer/bin/Release/net48/TiaPortalDashboard.exe
+src/TiaOpennessMcpServer/bin/V19/Release/net48/TiaPortalDashboard.exe
 ```
 
 ### 3. Add yourself to the TIA Openness security group
@@ -104,7 +104,7 @@ TIA Portal requires your Windows account to be in a specific security group befo
 
 ### 4. Run the dashboard
 
-1. Open your project in **TIA Portal V20**
+1. Open your project in **TIA Portal (V19 or V20)**
 2. Double-click `TiaPortalDashboard.exe`
 3. A native desktop window opens with the dashboard inside it
 4. Click **Connect to TIA Portal** — the dashboard reads your open project
@@ -152,7 +152,7 @@ Create (or edit) `C:\Users\<you>\.claude\.mcp.json`:
 {
   "mcpServers": {
     "tia-portal": {
-      "command": "C:\\path\\to\\tia-portal-mcp\\src\\TiaOpennessMcpServer\\bin\\Release\\net48\\TiaPortalDashboard.exe",
+      "command": "C:\\path\\to\\tia-portal-mcp\\src\\TiaOpennessMcpServer\\bin\\V19\\Release\\net48\\TiaPortalDashboard.exe",
       "args": ["--mcp-stdio"]
     }
   }
