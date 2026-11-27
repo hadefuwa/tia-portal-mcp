@@ -169,6 +169,7 @@ public sealed class HmiScreenBuildService
                         try { SetMl(item, "Text", tx.GetString()!); applied.Add("Text"); }
                         catch (Exception ex) { notApplied.Add("Text: " + First(ex)); }
                     }
+                    if (o.TryGetProperty("props", out var props)) ApplyProps(item, props, applied, notApplied);
                     if (o.TryGetProperty("move", out var mv)) ApplyMove(item, o, mv, applied, notApplied);
                     if (o.TryGetProperty("bind", out var binds))
                         foreach (var b in binds.EnumerateArray()) ApplyBinding(item, b, palette, applied, notApplied);
@@ -379,22 +380,33 @@ public sealed class HmiScreenBuildService
             js = ColRef.Replace(js, m => pal.TryGetValue(m.Groups[1].Value, out var hex) ? ColorLiteral(hex) : m.Value);
             var sd = item.Dynamizations.Create<ScriptDynamization>(prop);
             sd.ScriptCode = "return " + js + ";";
+            // AutomaticTags: TIA derives the trigger tags from the Tags('x').Read() calls in the script.
+            // (Setting Trigger.Tags to a string[] is accepted by Openness but compiles as "The configured tag is invalid".)
             var trig = "";
-            try
-            {
-                if (tags.Count > 0)
-                {
-                    sd.Trigger.Tags = tags.ToArray();
-                    sd.Trigger.Type = TriggerType.Tags; trig = "tags";
-                }
-            }
-            catch
-            {
-                try { sd.Trigger.Type = (TriggerType)Enum.Parse(typeof(TriggerType), "T1s", true); trig = "T1s (tag trigger refused)"; } catch { }
-            }
+            try { sd.Trigger.Type = (TriggerType)Enum.Parse(typeof(TriggerType), "AutomaticTags", true); trig = "automatic tags"; }
+            catch { try { sd.Trigger.Type = (TriggerType)Enum.Parse(typeof(TriggerType), "T1s", true); trig = "T1s"; } catch { } }
             applied.Add($"{prop}<-script{(trig.Length > 0 ? " [" + trig + "]" : "")}");
         }
         catch (Exception ex) { notApplied.Add($"bind {prop}: {First(ex)}"); }
+    }
+
+    // Raw properties by Openness name: enums by value name, everything else converted to the property type.
+    private static void ApplyProps(HmiScreenItemBase item, JsonElement props, List<string> applied, List<string> notApplied)
+    {
+        foreach (var p in props.EnumerateObject())
+        {
+            var pi = item.GetType().GetProperty(p.Name);
+            if (pi is not { CanWrite: true }) { notApplied.Add($"{p.Name}: not writable on {item.GetType().Name}"); continue; }
+            if (pi.PropertyType.IsEnum) { SetEnumAny(item, new[] { p.Name }, new[] { p.Value.ToString() }, applied, notApplied); continue; }
+            object v = p.Value.ValueKind switch
+            {
+                JsonValueKind.True => true, JsonValueKind.False => false,
+                JsonValueKind.Number => p.Value.GetDouble(),
+                _ => p.Value.GetString()!,
+            };
+            if (pi.PropertyType == typeof(Color)) v = ParseColor((string)v, 1);
+            TrySet(item, p.Name, v, applied, notApplied);
+        }
     }
 
     // Native movement (no script): the item slides from its map position (tag = start) to map position + (dx, dy) (tag = end).
@@ -415,7 +427,7 @@ public sealed class HmiScreenBuildService
                 {
                     var sd = item.Dynamizations.Find(prop) as ScriptDynamization ?? item.Dynamizations.Create<ScriptDynamization>(prop);
                     sd.ScriptCode = frac + $"return Math.round({baseVal} + f * {d.GetInt32()});";
-                    try { sd.Trigger.Tags = new[] { tag }; sd.Trigger.Type = TriggerType.Tags; } catch { }
+                    try { sd.Trigger.Type = (TriggerType)Enum.Parse(typeof(TriggerType), "AutomaticTags", true); } catch { }
                     applied.Add($"{prop}<-script move [{tag}]");
                 }
                 catch (Exception ex) { notApplied.Add($"move {prop}: {First(ex)}"); }
